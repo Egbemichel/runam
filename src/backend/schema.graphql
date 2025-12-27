@@ -1,0 +1,107 @@
+type Query {
+  me: UserType
+  errand(id: ID!): ErrandType
+  errands(status: String, requesterId: Int): [ErrandType]
+}
+
+type UserType {
+  id: ID!
+  lastLogin: DateTime
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  firstName: String!
+  lastName: String!
+  email: String!
+
+  """
+  Designates whether this user should be treated as active. Unselect this instead of deleting accounts.
+  """
+  isActive: Boolean!
+  dateJoined: DateTime!
+}
+
+"""
+The `DateTime` scalar type represents a DateTime
+value as specified by
+[iso8601](https://en.wikipedia.org/wiki/ISO_8601).
+"""
+scalar DateTime
+
+type ErrandType {
+  id: ID!
+  requester: UserType!
+  title: String!
+  description: String!
+  pickupLatitude: Float!
+  pickupLongitude: Float!
+  dropoffLatitude: Float!
+  dropoffLongitude: Float!
+  budget: Decimal!
+  status: ErrandsErrandStatusChoices!
+  createdAt: DateTime!
+}
+
+"""The `Decimal` scalar type represents a python Decimal."""
+scalar Decimal
+
+"""An enumeration."""
+enum ErrandsErrandStatusChoices {
+  """Pending"""
+  PENDING
+
+  """Assigned"""
+  ASSIGNED
+
+  """Completed"""
+  COMPLETED
+
+  """Cancelled"""
+  CANCELLED
+}
+
+type Mutation {
+  """Obtain JSON Web Token mutation"""
+  tokenAuth(username: String!, password: String!): ObtainJSONWebToken
+  verifyToken(token: String): Verify
+  refreshToken(token: String): Refresh
+  createErrand(budget: Decimal!, description: String!, dropoffLatitude: Float!, dropoffLongitude: Float!, pickupLatitude: Float!, pickupLongitude: Float!, title: String!): CreateErrand
+  updateErrand(budget: Decimal, description: String, dropoffLatitude: Float, dropoffLongitude: Float, id: ID!, pickupLatitude: Float, pickupLongitude: Float, status: String, title: String): UpdateErrand
+  deleteErrand(id: ID!): DeleteErrand
+}
+
+"""Obtain JSON Web Token mutation"""
+type ObtainJSONWebToken {
+  payload: GenericScalar!
+  refreshExpiresIn: Int!
+  token: String!
+}
+
+"""
+The `GenericScalar` scalar type represents a generic
+GraphQL scalar value that could be:
+String, Boolean, Int, Float, List or Object.
+"""
+scalar GenericScalar
+
+type Verify {
+  payload: GenericScalar!
+}
+
+type Refresh {
+  payload: GenericScalar!
+  refreshExpiresIn: Int!
+  token: String!
+}
+
+type CreateErrand {
+  errand: ErrandType
+}
+
+type UpdateErrand {
+  errand: ErrandType
+}
+
+type DeleteErrand {
+  ok: Boolean
+}

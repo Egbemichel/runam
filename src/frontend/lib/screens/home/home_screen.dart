@@ -23,8 +23,15 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final AuthController authController = Get.put(AuthController());
+  late final AuthController authController;
   final DraggableScrollableController _sheetController = DraggableScrollableController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Get the singleton instance of AuthController
+    authController = Get.find<AuthController>();
+  }
 
   // mapbox.MapboxMap? mapboxMap;
   // mapbox.CameraOptions? _cameraOptions;
@@ -134,11 +141,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: () => context.pushNamed(ProfileScreen.routeName),
                     child: Hero(
                       tag: 'ghost-avatar-hero',
-                      child: Obx(() => CircleAvatar(
-                        backgroundImage: authController.avatarUrl.value.isNotEmpty
-                            ? NetworkImage(authController.avatarUrl.value)
-                            : const AssetImage('assets/images/ghost.png') as ImageProvider,
-                      )),
+                      child: Obx(() {
+                        return CircleAvatar(
+                          backgroundImage: authController.avatarUrl.value.isNotEmpty
+                              ? NetworkImage(authController.avatarUrl.value)
+                              : const AssetImage('assets/images/ghost.png') as ImageProvider,
+                        );
+                      }),
                     ),
                   ),
                 ],
@@ -168,25 +177,33 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: 20),
                     Obx(() => Text(authController.isAuthenticated.value ? 'Recent errands' : 'Sample errand', style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: AppTheme.primary700))),
                     const SizedBox(height: 15),
-                    Obx(() => authController.isAuthenticated.value ? _buildEmptyState() : const ErrandCard()),
+                    Obx(() {
+                      final isAuth = authController.isAuthenticated.value;
+                      return isAuth ? _buildEmptyState() : const ErrandCard();
+                    }),
                     const SizedBox(height: 40),
-                    Center(
-                      child: RichText(
-                        text: const TextSpan(
-                          text: 'Already have an account? ',
-                          style: TextStyle(color: AppTheme.primary700),
-                          children: [
-                            TextSpan(
-                              text: 'Log in',
-                              style: TextStyle(
-                                color: AppTheme.links,
-                                fontWeight: FontWeight.bold,
+                    Obx(() {
+                      if (authController.isAuthenticated.value) {
+                        return const SizedBox.shrink();
+                      }
+                      return Center(
+                        child: RichText(
+                          text: const TextSpan(
+                            text: 'Already have an account? ',
+                            style: TextStyle(color: AppTheme.primary700),
+                            children: [
+                              TextSpan(
+                                text: 'Log in',
+                                style: TextStyle(
+                                  color: AppTheme.links,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ),
+                      );
+                    }),
                   ],
                 ),
               );
@@ -194,6 +211,18 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
 
           _buildMovingFloatingCTA(),
+          Obx(() {
+            if (!authController.isLoading.value) return const SizedBox.shrink();
+
+            return Positioned.fill(
+              child: Container(
+                color: Colors.black.withOpacity(0.4),
+                child: const Center(
+                  child: CircularProgressIndicator(),
+                ),
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -219,7 +248,14 @@ class _HomeScreenState extends State<HomeScreen> {
               width: isExpanded ? 56 : 220,
               height: 56,
               child: ElevatedButton(
-                onPressed: () {},
+                onPressed: () {
+                  if (isAuth) {
+                    _handleCreateErrand();
+                  } else {
+                    // ROLE 2: Unauthenticated - Trigger Login
+                    authController.signInWithGoogle();
+                  }
+                },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.neutral100,
                   elevation: 4,
@@ -230,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(isAuth ? IconsaxPlusLinear.add : IconsaxPlusLinear.profile, color: AppTheme.primary700),
+                    Icon(isAuth ? IconsaxPlusLinear.add : IconsaxPlusLinear.profile, color: AppTheme.primary700, size: 32),
                     ClipRect(
                       child: AnimatedSize(
                         duration: const Duration(milliseconds: 300),
@@ -258,12 +294,20 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Add this helper method to your _HomeScreenState
+  void _handleCreateErrand() {
+    // For now, let's just show a snackbar or navigate
+    print('🚀 Create Errand button pressed');
+
+    // Future: context.pushNamed(CreateErrandScreen.routeName);
+  }
+
   Widget _buildEmptyState() {
     return Column(
       children: [
-        Image.asset('assets/images/empty_box.png', height: 150),
-        const Text("No errands yet", style: TextStyle(fontWeight: FontWeight.bold)),
-        const Text("Don't be shy make a request"),
+        Image.asset('assets/images/empty-box.png', height: 150),
+        Text("No errands yet", style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: AppTheme.primary700, fontWeight: FontWeight.bold)),
+        Text("Don't be shy make a request", style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppTheme.primary700, fontWeight: FontWeight.bold)),
       ],
     );
   }
