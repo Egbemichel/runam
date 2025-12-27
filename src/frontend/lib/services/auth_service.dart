@@ -1,20 +1,34 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:graphql_flutter/graphql_flutter.dart';
+import 'graphql_client.dart';
 
 class AuthService {
-  static const String baseUrl = 'http://10.0.2.2:8000/api/auth';
+  final GraphQLClient _client = GraphQLClientInstance.client;
 
   Future<Map<String, dynamic>> verifyGoogleToken(String idToken) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/google/'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'id_token': idToken}),
+    const String mutation = r'''
+      mutation VerifyGoogleToken($idToken: String!) {
+        verifyGoogleToken(idToken: $idToken) {
+          access
+          user {
+            avatar
+          }
+        }
+      }
+    ''';
+
+    final result = await _client.mutate(
+      MutationOptions(
+        document: gql(mutation),
+        variables: {
+          'idToken': idToken, // ✅ correct variable name
+        },
+      ),
     );
 
-    if (response.statusCode != 200) {
-      throw Exception('Auth failed');
+    if (result.hasException) {
+      throw result.exception!;
     }
 
-    return jsonDecode(response.body);
+    return result.data!['verifyGoogleToken'];
   }
 }
