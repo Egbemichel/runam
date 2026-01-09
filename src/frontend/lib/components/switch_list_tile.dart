@@ -1,25 +1,33 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:runam/app/theme.dart';
+import '../controllers/auth_controller.dart';
 
 class ProfileSwitchListTile extends StatefulWidget {
-  const ProfileSwitchListTile({super.key});
+  final bool isAuth;
+
+  const ProfileSwitchListTile({super.key, required this.isAuth});
 
   @override
   State<ProfileSwitchListTile> createState() => _ProfileSwitchListTileState();
 }
 
 class _ProfileSwitchListTileState extends State<ProfileSwitchListTile> {
-  // false means manual entry is visible
   bool _useCurrentLocation = false;
+  late final AuthController authController;
+
+  @override
+  void initState() {
+    super.initState();
+    authController = Get.find<AuthController>();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Column(
-      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 1. Header with ListTile to isolate the Switch
         ListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(
@@ -32,62 +40,68 @@ class _ProfileSwitchListTileState extends State<ProfileSwitchListTile> {
           trailing: Switch.adaptive(
             value: _useCurrentLocation,
             activeColor: AppTheme.primary700,
-            onChanged: (bool value) {
-              setState(() {
-                _useCurrentLocation = value;
-              });
+            onChanged: (value) {
+              setState(() => _useCurrentLocation = value);
             },
           ),
         ),
 
-        // 2. Animated section for the TextField
-        AnimatedSize(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-          child: _useCurrentLocation
-              ? const SizedBox(width: double.infinity) // Hidden when toggle is ON
-              : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 12),
-              // Pill-shaped location input
-              // Add Mapbox search listener
-              TextField(
-                decoration: InputDecoration(
-                  hintText: 'Enter your preferred location',
-                  hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
-                  suffixIcon: const Icon(
-                    IconsaxPlusLinear.gps,
-                    color: Colors.grey,
-                    size: 20,
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xFFF8F9FA),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(30),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(30),
-                    borderSide: BorderSide.none,
+        /// 🔥 Only Obx where it actually reacts
+        Obx(() {
+          final isBuyer = authController.userRoles.contains('Buyer');
+
+          return AnimatedSize(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            child: _useCurrentLocation || (widget.isAuth && !isBuyer)
+                ? const SizedBox.shrink()
+                : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
+                TextField(
+                  decoration: InputDecoration(
+                    hintText: 'Enter your preferred location',
+                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
+                    suffixIcon: const Icon(
+                      IconsaxPlusLinear.gps,
+                      color: Colors.grey,
+                      size: 20,
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFFF8F9FA),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              // Instructional text
-              Text(
-                'This location is the same which runners will deliver to and get paid at for round-trip errands.',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 12,
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          );
+        }),
+
+        const SizedBox(height: 8),
+
+        /// 🔥 Clean reactive text
+        Obx(() {
+          final isRunner = authController.userRoles.contains('Runner');
+
+          return Text(
+            widget.isAuth && isRunner
+                ? "Buyers use this location to find nearby runners. Turning it off means no errands coming your way."
+                : "This location is the same which runners will deliver to and get paid at for round-trip errands.",
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          );
+        }),
+
+        const SizedBox(height: 16),
       ],
     );
   }

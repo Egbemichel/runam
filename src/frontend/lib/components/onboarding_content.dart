@@ -66,7 +66,7 @@ class OnboardingContent extends StatelessWidget {
                         'Skip',
                         style: Theme.of(context)
                             .textTheme
-                            .displaySmall
+                            .bodySmall
                             ?.copyWith(color: AppTheme.primary700),
                       ),
                     ),
@@ -78,7 +78,7 @@ class OnboardingContent extends StatelessWidget {
                   description,
                   textAlign: TextAlign.left,
                   style: const TextStyle(
-                    fontSize: 30,
+                    fontSize: 24,
                     fontWeight: FontWeight.w500,
                     color: AppTheme.primary700,
                   ),
@@ -139,7 +139,7 @@ class OnboardingContent extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context)
                           .textTheme
-                          .headlineMedium
+                          .bodyLarge
                           ?.copyWith(color: AppTheme.neutral100),
                     ),
                     const SizedBox(height: 6),

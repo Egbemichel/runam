@@ -47,8 +47,12 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.google',
 
     # Local apps
-    'users.apps.UsersConfig',
-    'errands.apps.ErrandsConfig',
+    'apps.users.apps.UsersConfig',
+    'apps.errands.apps.ErrandsConfig',
+    'apps.locations.apps.LocationsConfig',
+    'apps.roles.apps.RolesConfig',
+    'apps.trust.apps.TrustConfig',
+
 ]
 
 SITE_ID = 1
@@ -117,6 +121,17 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 
+# -----------------------
+# django-allauth config
+# -----------------------
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_AUTHENTICATION_METHOD = 'email'
+ACCOUNT_UNIQUE_EMAIL = True
+
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_QUERY_EMAIL = True
+
 # -------------------------------------------------------------------
 # GraphQL / Graphene
 # -------------------------------------------------------------------
@@ -168,3 +183,5 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.getenv("GOOGLE_CLIENT_ID")
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+SOCIALACCOUNT_ADAPTER = 'apps.users.adapters.CustomSocialAccountAdapter'
+
