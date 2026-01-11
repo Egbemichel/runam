@@ -30,7 +30,7 @@ class ErrandCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  LabelValue(icon: IconsaxPlusLinear.send_2, text: 'Zoatupsi, Messasi Dispensaire'),
+                  LabelValue(icon: IconsaxPlusLinear.send_2, text: 'Zoatupsi, Messasi'),
                   const SizedBox(height: 8),
                   LabelValue(icon: IconsaxPlusLinear.location, text: 'Marche Messasi'),
                 ],
@@ -63,7 +63,7 @@ class LabelValue extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: AppTheme.primary700),
         const SizedBox(width: 8),
-        Text(text, style: const TextStyle(fontSize: 13)),
+        Text(text, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis),
       ],
     );
   }

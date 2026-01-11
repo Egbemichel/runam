@@ -48,7 +48,7 @@ class AppTheme {
             borderRadius: BorderRadius.circular(8.0),
               color: AppTheme.neutral100,
           ),
-          child: Icon(IconsaxPlusLinear.arrow_left_1),
+          child: Icon(IconsaxPlusLinear.arrow_left_1, size: 24,),
         );
       },
     )

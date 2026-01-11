@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:runam/screens/profile/profile_screen.dart';
+import '../features/errand/screens/add_errand.dart';
+import '../features/errand/screens/my_errands_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/onboarding/onboarding_screen.dart';
 import '../screens/splash/splash_screen.dart';
@@ -35,6 +37,18 @@ final appRouter = GoRouter(
       path: ProfileScreen.path,
       name: ProfileScreen.routeName,
       builder: (_, __) => const ProfileScreen(),
+    ),
+    GoRoute(
+      parentNavigatorKey: rootNavigatorKey,
+      path: AddErrandScreen.path,
+      name: AddErrandScreen.routeName,
+      builder: (_, __) => const AddErrandScreen(),
+    ),
+    GoRoute(
+      parentNavigatorKey: rootNavigatorKey,
+      path: MyErrandsScreen.path,
+      name: MyErrandsScreen.routeName,
+      builder: (_, __) => const MyErrandsScreen(),
     ),
   ],
 );

@@ -1,15 +1,16 @@
-// import 'dart:async'; // Added for StreamSubscription
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
-// import 'package:flutter_dotenv/flutter_dotenv.dart';
-// import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
-// import 'package:geolocator/geolocator.dart' as geo;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
+import 'package:geolocator/geolocator.dart' as geo;
 
 import '../../app/theme.dart';
 import '../../components/errand_card.dart';
 import '../../controllers/auth_controller.dart';
+import '../../features/errand/screens/add_errand.dart';
 import '../profile/profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -24,76 +25,101 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final AuthController authController;
-  final DraggableScrollableController _sheetController = DraggableScrollableController();
+  final DraggableScrollableController _sheetController =
+  DraggableScrollableController();
+
+  mapbox.MapboxMap? mapboxMap;
+  mapbox.CameraOptions? _cameraOptions;
+
+  StreamSubscription<geo.Position>? _positionStream;
+  bool _isFollowingUser = true;
 
   @override
   void initState() {
     super.initState();
-    // Get the singleton instance of AuthController
     authController = Get.find<AuthController>();
+    _startTrackingLocation();
   }
 
-  // mapbox.MapboxMap? mapboxMap;
-  // mapbox.CameraOptions? _cameraOptions;
+  @override
+  void dispose() {
+    _positionStream?.cancel();
+    super.dispose();
+  }
 
-  // 1. Stream logic variables
-  // StreamSubscription<geo.Position>? _positionStream;
-  // bool _isFollowingUser = true; // Flag to auto-center
+  Future<void> _startTrackingLocation() async {
+    final token = dotenv.env['MAPBOX_PUBLIC_TOKEN'];
+    if (token == null) return;
+    mapbox.MapboxOptions.setAccessToken(token);
 
-  // @override
-  // void initState() {
-  //   super.initState();
-  //   _startTrackingLocation();
-  // }
+    geo.LocationPermission permission =
+    await geo.Geolocator.requestPermission();
+    if (permission == geo.LocationPermission.denied ||
+        permission == geo.LocationPermission.deniedForever) return;
 
-  // @override
-  // void dispose() {
-  //   // 2. Always cancel streams to prevent memory leaks
-  //   _positionStream?.cancel();
-  //   super.dispose();
-  // }
+    final geo.Position initialPos =
+    await geo.Geolocator.getCurrentPosition();
 
-  // 3. Initialize and Start Streaming Location
-  // Future<void> _startTrackingLocation() async {
-  //   final token = dotenv.env['MAPBOX_PUBLIC_TOKEN'];
-  //   if (token == null) return;
-  //   mapbox.MapboxOptions.setAccessToken(token);
-  //
-  //   geo.LocationPermission permission = await geo.Geolocator.requestPermission();
-  //   if (permission == geo.LocationPermission.denied || permission == geo.LocationPermission.deniedForever) return;
-  //
-  //   // Initial setup of camera
-  //   final geo.Position initialPos = await geo.Geolocator.getCurrentPosition();
-  //   setState(() {
-  //     _cameraOptions = mapbox.CameraOptions(
-  //       center: mapbox.Point(coordinates: mapbox.Position(initialPos.longitude, initialPos.latitude)),
-  //       zoom: 15.0,
-  //     );
-  //   });
-  //
-  //   // START STREAMING
-  //   _positionStream = geo.Geolocator.getPositionStream(
-  //     locationSettings: const geo.LocationSettings(
-  //       accuracy: geo.LocationAccuracy.high,
-  //       distanceFilter: 5, // Update only if user moves 5 meters
-  //     ),
-  //   ).listen((geo.Position position) {
-  //     if (_isFollowingUser && mapboxMap != null) {
-  //       // Smoothly move camera to new location
-  //       mapboxMap!.setCamera(mapbox.CameraOptions(
-  //         center: mapbox.Point(coordinates: mapbox.Position(position.longitude, position.latitude)),
-  //       ));
-  //     }
-  //   });
-  // }
+    setState(() {
+      _cameraOptions = mapbox.CameraOptions(
+        center: mapbox.Point(
+          coordinates:
+          mapbox.Position(initialPos.longitude, initialPos.latitude),
+        ),
+        zoom: 15.0,
+      );
+    });
 
-  // _onMapCreated(mapbox.MapboxMap mapboxMap) {
-  //   this.mapboxMap = mapboxMap;
-  //   mapboxMap.location.updateSettings(mapbox.LocationComponentSettings(
-  //     enabled: true,
-  //     pulsingEnabled: true,
-  //   ));
-  // }
+    _positionStream = geo.Geolocator.getPositionStream(
+      locationSettings: const geo.LocationSettings(
+        accuracy: geo.LocationAccuracy.bestForNavigation,
+        distanceFilter: 10,
+      ),
+    ).listen((position) {
+      if (!_isFollowingUser || mapboxMap == null) return;
+
+      mapboxMap!.flyTo(
+        mapbox.CameraOptions(
+          center: mapbox.Point(
+            coordinates: mapbox.Position(
+              position.longitude,
+              position.latitude,
+            ),
+          ),
+          zoom: 15,
+        ),
+        mapbox.MapAnimationOptions(duration: 800),
+      );
+    });
+  }
+
+  Future<void> _recenterMap() async {
+    if (mapboxMap == null) return;
+
+    final pos = await geo.Geolocator.getCurrentPosition();
+
+    mapboxMap!.flyTo(
+      mapbox.CameraOptions(
+        center: mapbox.Point(
+          coordinates: mapbox.Position(pos.longitude, pos.latitude),
+        ),
+        zoom: 15,
+      ),
+      mapbox.MapAnimationOptions(duration: 600),
+    );
+
+    setState(() => _isFollowingUser = true);
+  }
+
+  void _onMapCreated(mapbox.MapboxMap map) {
+    mapboxMap = map;
+    map.location.updateSettings(
+      mapbox.LocationComponentSettings(
+        enabled: true,
+        pulsingEnabled: true,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -101,61 +127,74 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: AppTheme.neutral100,
       body: Stack(
         children: [
-          // MAP SECTION
-          // Positioned.fill(
-          //   child: _cameraOptions == null
-          //       ? const Center(child: CircularProgressIndicator())
-          //       : Listener(
-          //     // 4. If the user touches the map, stop auto-following
-          //     onPointerDown: (_) => setState(() => _isFollowingUser = false),
-          //     child: mapbox.MapWidget(
-          //       onMapCreated: _onMapCreated,
-          //       cameraOptions: _cameraOptions!,
-          //       styleUri: mapbox.MapboxStyles.MAPBOX_STREETS,
-          //     ),
-          //   ),
-          // ),
+          mapbox.MapWidget(
+            cameraOptions: _cameraOptions,
+            onMapCreated: _onMapCreated,
+            onCameraChangeListener: (camera) {
+              if (_isFollowingUser) {
+                _isFollowingUser = false;
+                setState(() {});
+              }
+            },
+          ),
 
-          // 5. RE-CENTER BUTTON (Only shows if user isn't following)
-          // if (!_isFollowingUser)
-          //   Positioned(
-          //     top: MediaQuery.paddingOf(context).top + 80,
-          //     right: 20,
-          //     child: FloatingActionButton.small(
-          //       backgroundColor: AppTheme.neutral100,
-          //       onPressed: () => setState(() => _isFollowingUser = true),
-          //       child: const Icon(Icons.my_location, color: AppTheme.primary700),
-          //     ),
-          //   ),
+          if (!_isFollowingUser)
+            Positioned(
+              top: MediaQuery.paddingOf(context).top + 80,
+              right: 20,
+              child: FloatingActionButton.small(
+                backgroundColor: AppTheme.neutral100,
+                onPressed: _recenterMap,
+                child: const Icon(Icons.my_location,
+                    color: AppTheme.primary700),
+              ),
+            ),
 
-          // Header Overlay
+          /// HEADER
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Your preferred location', style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: AppTheme.primary700, fontWeight: FontWeight.bold)),
-                  const Icon(IconsaxPlusLinear.edit, color: AppTheme.primary700),
-                  GestureDetector(
-                    onTap: () => context.pushNamed(ProfileScreen.routeName),
-                    child: Hero(
-                      tag: 'ghost-avatar-hero',
-                      child: Obx(() {
-                        return CircleAvatar(
-                          backgroundImage: authController.avatarUrl.value.isNotEmpty
-                              ? NetworkImage(authController.avatarUrl.value)
-                              : const AssetImage('assets/images/ghost.png') as ImageProvider,
-                        );
-                      }),
-                    ),
+                  Text(
+                    'Your preferred location',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyLarge
+                        ?.copyWith(
+                        color: AppTheme.primary700,
+                        fontWeight: FontWeight.bold),
                   ),
+                  const Icon(IconsaxPlusLinear.edit,
+                      color: AppTheme.primary700),
+
+                  /// 🔑 AVATAR – reactive & safe
+                  Obx(() {
+                    final avatar = authController.avatarUrl;
+
+                    return GestureDetector(
+                      onTap: () =>
+                          context.pushNamed(ProfileScreen.routeName),
+                      child: Hero(
+                        tag: 'ghost-avatar-hero',
+                        child: CircleAvatar(
+                          backgroundImage: avatar.isNotEmpty
+                              ? NetworkImage(avatar)
+                              : const AssetImage(
+                              'assets/images/ghost.png')
+                          as ImageProvider,
+                        ),
+                      ),
+                    );
+                  }),
                 ],
               ),
             ),
           ),
 
-          // Draggable Sheet
+          /// DRAGGABLE SHEET
           DraggableScrollableSheet(
             initialChildSize: 0.55,
             minChildSize: 0.3,
@@ -167,39 +206,63 @@ class _HomeScreenState extends State<HomeScreen> {
               return Container(
                 decoration: const BoxDecoration(
                   color: AppTheme.secondary500,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(40)),
+                  borderRadius:
+                  BorderRadius.vertical(top: Radius.circular(40)),
                 ),
                 child: ListView(
                   controller: scrollController,
                   padding: const EdgeInsets.all(24),
                   children: [
-                    Center(child: Container(width: 40, height: 5, decoration: BoxDecoration(color: AppTheme.primary700.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(10)))),
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary700
+                              .withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 20),
-                    Obx(() => Text(authController.isAuthenticated.value ? 'Recent errands' : 'Sample errand', style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: AppTheme.primary700))),
+
+                    /// TITLE
+                    Obx(() => Text(
+                      authController.isAuthenticated.value
+                          ? 'Recent errands'
+                          : 'Sample errand',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.copyWith(
+                          color: AppTheme.primary700),
+                    )),
+
                     const SizedBox(height: 15),
+
+                    /// CONTENT
                     Obx(() {
-                      final isAuth = authController.isAuthenticated.value;
-                      return isAuth ? _buildEmptyState() : const ErrandCard();
+                      return authController.isAuthenticated.value
+                          ? _buildEmptyState()
+                          : const ErrandCard();
                     }),
+
                     const SizedBox(height: 40),
+
+                    /// FOOTER LOGIN PROMPT
                     Obx(() {
                       if (authController.isAuthenticated.value) {
                         return const SizedBox.shrink();
                       }
                       return Center(
-                        child: RichText(
-                          text: const TextSpan(
-                            text: 'Already have an account? ',
-                            style: TextStyle(color: AppTheme.primary700),
-                            children: [
-                              TextSpan(
-                                text: 'Log in',
-                                style: TextStyle(
-                                  color: AppTheme.links,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
+                        child: GestureDetector(
+                          onTap: () => authController.login(),
+                          child: const Text(
+                            'Already have an account? Log in',
+                            style: TextStyle(
+                              color: AppTheme.primary700,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       );
@@ -211,12 +274,15 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
 
           _buildMovingFloatingCTA(),
-          Obx(() {
-            if (!authController.isLoading.value) return const SizedBox.shrink();
 
+          /// GLOBAL LOADING OVERLAY
+          Obx(() {
+            if (!authController.isLoading.value) {
+              return const SizedBox.shrink();
+            }
             return Positioned.fill(
               child: Container(
-                color: Colors.black.withOpacity(0.4),
+                color: Colors.black.withValues(alpha: 0.4),
                 child: const Center(
                   child: CircularProgressIndicator(),
                 ),
@@ -253,7 +319,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     _handleCreateErrand();
                   } else {
                     // ROLE 2: Unauthenticated - Trigger Login
-                    authController.signInWithGoogle();
+                    authController.login();
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -294,20 +360,28 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Add this helper method to your _HomeScreenState
   void _handleCreateErrand() {
-    // For now, let's just show a snackbar or navigate
-    print('🚀 Create Errand button pressed');
-
-    // Future: context.pushNamed(CreateErrandScreen.routeName);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (context) => const AddErrandScreen()),
+    );
   }
 
   Widget _buildEmptyState() {
     return Column(
       children: [
         Image.asset('assets/images/empty-box.png', height: 150),
-        Text("No errands yet", style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: AppTheme.primary700, fontWeight: FontWeight.bold)),
-        Text("Don't be shy make a request", style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppTheme.primary700, fontWeight: FontWeight.bold)),
+        Text(
+          "No errands yet",
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              color: AppTheme.primary700, fontWeight: FontWeight.bold),
+        ),
+        Text(
+          "Don't be shy make a request",
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppTheme.primary700, fontWeight: FontWeight.bold),
+        ),
       ],
     );
   }

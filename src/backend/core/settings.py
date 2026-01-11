@@ -40,6 +40,9 @@ INSTALLED_APPS = [
     # GraphQL
     'graphene_django',
 
+    # JWT refresh tokens
+    'graphql_jwt.refresh_token.apps.RefreshTokenConfig',
+
     # Auth / Social (used via GraphQL)
     'allauth',
     'allauth.account',
@@ -47,8 +50,13 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.google',
 
     # Local apps
-    'users.apps.UsersConfig',
-    'errands.apps.ErrandsConfig',
+    'apps.users.apps.UsersConfig',
+    'apps.errands.apps.ErrandsConfig',
+    'apps.locations.apps.LocationsConfig',
+    'apps.roles.apps.RolesConfig',
+    'apps.trust.apps.TrustConfig',
+    'errand_location'
+
 ]
 
 SITE_ID = 1
@@ -107,7 +115,6 @@ DATABASES = {
 # -------------------------------------------------------------------
 # Authentication
 # -------------------------------------------------------------------
-AUTH_USER_MODEL = 'users.User'
 
 AUTHENTICATION_BACKENDS = [
     # GraphQL JWT auth
@@ -116,6 +123,9 @@ AUTHENTICATION_BACKENDS = [
     # Default Django auth
     'django.contrib.auth.backends.ModelBackend',
 ]
+
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
 
 # -------------------------------------------------------------------
 # GraphQL / Graphene
@@ -165,6 +175,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # -------------------------------------------------------------------
 # Environment variables
 # -------------------------------------------------------------------
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
-SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.getenv("GOOGLE_CLIENT_ID")
-SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+SOCIALACCOUNT_ADAPTER = 'apps.users.adapters.CustomSocialAccountAdapter'
+
+# -------------------------------------------------------------------
+# Media / Storage
+# -------------------------------------------------------------------
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Storage mode: 'local' or 'supabase'
+STORAGE_MODE = os.getenv('STORAGE_MODE', 'local' if DEBUG else 'supabase')
+SUPABASE_URL = os.getenv('SUPABASE_URL', '')
+SUPABASE_BUCKET = os.getenv('SUPABASE_BUCKET', 'public')
+SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
