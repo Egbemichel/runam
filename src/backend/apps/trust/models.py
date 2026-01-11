@@ -1,9 +1,11 @@
+from django.contrib.auth import get_user_model
 from django.db import models
 
+User = get_user_model()
 
 class TrustScoreEvent(models.Model):
     user = models.ForeignKey(
-        "users.User",
+        User,
         on_delete=models.CASCADE,
         related_name="trust_events",
     )

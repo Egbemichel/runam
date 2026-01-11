@@ -1,31 +1,32 @@
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import models
 
+User = get_user_model()
 
-class Location(models.Model):
-    DEVICE = "DEVICE"
-    PREFERRED = "PREFERRED"
+class LocationMode(models.TextChoices):
+    DEVICE = "DEVICE", "Device"
+    STATIC = "STATIC", "Static"
 
-    LOCATION_TYPE_CHOICES = [
-        (DEVICE, "Device"),
-        (PREFERRED, "Preferred"),
-    ]
-
-    user = models.ForeignKey(
-        "users.User",
+class UserLocation(models.Model):
+    user = models.OneToOneField(
+        User,
         on_delete=models.CASCADE,
-        related_name="locations",
+        related_name="location",
     )
 
-    latitude = models.DecimalField(max_digits=9, decimal_places=6)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6)
-    label = models.CharField(max_length=255, blank=True)
-
-    type = models.CharField(
+    mode = models.CharField(
         max_length=10,
-        choices=LOCATION_TYPE_CHOICES,
-        default=DEVICE,
+        choices=LocationMode.choices,
+        default=LocationMode.STATIC,
     )
 
-    is_active = models.BooleanField(default=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    address = models.TextField(blank=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} – {self.mode}"

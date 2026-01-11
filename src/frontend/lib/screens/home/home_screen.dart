@@ -10,7 +10,7 @@ import 'package:geolocator/geolocator.dart' as geo;
 import '../../app/theme.dart';
 import '../../components/errand_card.dart';
 import '../../controllers/auth_controller.dart';
-import '../add_errand/add_errand.dart';
+import '../../features/errand/screens/add_errand.dart';
 import '../profile/profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -256,7 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       }
                       return Center(
                         child: GestureDetector(
-                          onTap: () => authController.signInWithGoogle(),
+                          onTap: () => authController.login(),
                           child: const Text(
                             'Already have an account? Log in',
                             style: TextStyle(
@@ -319,7 +319,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     _handleCreateErrand();
                   } else {
                     // ROLE 2: Unauthenticated - Trigger Login
-                    authController.signInWithGoogle();
+                    authController.login();
                   }
                 },
                 style: ElevatedButton.styleFrom(

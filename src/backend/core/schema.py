@@ -1,28 +1,24 @@
 import graphene
-from django.conf import settings
+import graphql_jwt
 from django.contrib.auth import get_user_model
-from google.auth.transport import requests
-from google.oauth2 import id_token
 from graphene import relay
 from graphene_django import DjangoObjectType
 from graphql import GraphQLError
 from graphql_jwt.decorators import login_required
-from graphql_jwt.shortcuts import get_token
-import graphql_jwt
-
-from apps.errands.models import Errand
-from apps.roles.models import Role
-from apps.locations.models import Location
 from django.contrib.auth import login
 
-from allauth.socialaccount.models import SocialLogin, SocialAccount
-
-from allauth.socialaccount.adapter import get_adapter
-from allauth.account.utils import perform_login
-
-
-
-
+from apps.errands.models import Errand
+from apps.errands.services import store_errand_image
+from apps.locations.models import UserLocation
+from apps.roles.models import Role
+from apps.users.models import UserProfile
+from apps.users.services import (
+    verify_google_id_token,
+    get_or_create_google_user,
+    get_access_token,
+    get_refresh_token,
+)
+from errand_location.models import ErrandLocation
 
 User = get_user_model()
 
@@ -36,18 +32,43 @@ class RoleType(DjangoObjectType):
         fields = ("name",)
 
 
-class LocationType(DjangoObjectType):
+class ErrandLocationType(DjangoObjectType):
     class Meta:
-        model = Location
+        model = ErrandLocation
+        fields = (
+            "id",
+            "kind",
+            "latitude",
+            "longitude",
+            "address",
+        )
+
+
+class LocationType(DjangoObjectType):
+    label = graphene.String()
+    type = graphene.String()
+    isActive = graphene.Boolean()
+
+    class Meta:
+        model = UserLocation
         fields = (
             "id",
             "latitude",
             "longitude",
-            "label",
-            "type",
-            "is_active",
-            "created_at",
+            "address",
+            "mode",
+            "updated_at",
         )
+
+    def resolve_label(self, info):
+        return getattr(self, "address", None)
+
+    def resolve_type(self, info):
+        return getattr(self, "mode", None)
+
+    def resolve_isActive(self, info):
+        # If you later add an is_active field, map it here; for now, treat existing location as active
+        return True
 
 
 # =====================
@@ -56,8 +77,10 @@ class LocationType(DjangoObjectType):
 
 class UserType(DjangoObjectType):
     roles = graphene.List(RoleType)
-    locations = graphene.List(LocationType)
-    location = graphene.Field(LocationType, required=False)  # make optional
+    location = graphene.Field(LocationType, required=False)
+    name = graphene.String()
+    avatar = graphene.String()
+    trust_score = graphene.Int()
 
     class Meta:
         model = User
@@ -65,118 +88,142 @@ class UserType(DjangoObjectType):
         fields = (
             "id",
             "email",
-            "name",
-            "avatar",
-            "trust_score",
             "is_active",
             "is_staff",
-            "created_at",
-            "updated_at",
             "roles",
-            "locations",
+            # expose single location via resolver
         )
 
     def resolve_roles(self, info):
-        # Always return a list
-        return self.roles.all() if hasattr(self, "roles") else []
+        profile = getattr(self, "profile", None)
+        return profile.roles.all() if profile else []
 
     def resolve_location(self, info):
-        # Return the first active location or None
-        if hasattr(self, "locations"):
-            return self.locations.filter(is_active=True).first()
-        return None
+        return getattr(self, "location", None)
 
+    def resolve_name(self, info):
+        profile = getattr(self, "profile", None)
+        pname = getattr(profile, "name", None) if profile else None
+        if pname:
+            return pname
+        first_name = getattr(self, "first_name", "")
+        last_name = getattr(self, "last_name", "")
+        full = " ".join([n for n in [first_name, last_name] if n]).strip()
+        return full or None
 
+    def resolve_avatar(self, info):
+        profile = getattr(self, "profile", None)
+        return getattr(profile, "avatar", None) if profile else None
+
+    def resolve_trust_score(self, info):
+        profile = getattr(self, "profile", None)
+        return getattr(profile, "trust_score", None) if profile else None
 
 class ErrandType(DjangoObjectType):
+    locations = graphene.List(ErrandLocationType)
+
     class Meta:
         model = Errand
         interfaces = (relay.Node,)
         fields = (
             "id",
-            "requester",
-            "title",
-            "description",
-            "pickup_latitude",
-            "pickup_longitude",
-            "dropoff_latitude",
-            "dropoff_longitude",
-            "budget",
+            "type",
+            "instructions",
+            "speed",
+            "payment_method",
             "status",
             "created_at",
+            "image_url",
+            "locations",
         )
 
-# =====================
-# GOOGLE TOKEN VERIFY
-# =====================
+    def resolve_locations(self, info):
+        return self.locations.all()
 
-def verify_google_token(token):
-    try:
-        return id_token.verify_oauth2_token(
-            token,
-            requests.Request(),
-            settings.GOOGLE_CLIENT_ID,
-        )
-    except Exception:
-        raise GraphQLError("Invalid Google token")
 
-# =====================
-# AUTH MUTATIONS
-# =====================
+class SaveErrandDraft(graphene.Mutation):
+    errand = graphene.Field(ErrandType)
 
-# =====================
-# GOOGLE TOKEN VERIFY MUTATION FIX
-# =====================
+    class Arguments:
+        id = graphene.ID(required=False)
+        type = graphene.String(required=False)
+        instructions = graphene.String(required=False)
+        speed = graphene.String(required=False)
+        payment_method = graphene.String(required=False)
+        go_to = graphene.JSONString(required=False)
+        return_to = graphene.JSONString(required=False)
+
+    @login_required
+    def mutate(self, info, **data):
+        user = info.context.user
+        errand_id = data.get("id")
+
+        if errand_id:
+            errand = Errand.objects.get(id=errand_id, user=user)
+        else:
+            errand = Errand.objects.create(
+                user=user,
+                status="DRAFT",
+            )
+
+        # Update scalar fields
+        for field in ["type", "instructions", "speed", "payment_method"]:
+            if data.get(field) is not None:
+                setattr(errand, field, data[field])
+
+        errand.save()
+
+        # Reset locations (drafts should be replaceable)
+        if data.get("go_to") or data.get("return_to"):
+            errand.locations.all().delete()
+
+        if data.get("go_to"):
+            ErrandLocation.objects.create(
+                errand=errand,
+                kind="GO_TO",
+                **data["go_to"]
+            )
+
+        if data.get("return_to"):
+            ErrandLocation.objects.create(
+                errand=errand,
+                kind="RETURN_TO",
+                **data["return_to"]
+            )
+
+        return SaveErrandDraft(errand=errand)
+
+class IssueSessionTokens(graphene.Mutation):
+    access = graphene.String()
+    refresh = graphene.String()
+    user = graphene.Field(UserType)
+
+    @login_required
+    def mutate(self, info):
+        user = info.context.user
+        access = get_access_token(user)
+        refresh = get_refresh_token(user)
+        return IssueSessionTokens(access=access, refresh=refresh, user=user)
 
 class VerifyGoogleToken(graphene.Mutation):
     class Arguments:
         id_token = graphene.String(required=True)
 
     access = graphene.String()
+    refresh = graphene.String()
     user = graphene.Field(UserType)
 
     def mutate(self, info, id_token):
-        payload = verify_google_token(id_token)
+        payload = verify_google_id_token(id_token)
+        user = get_or_create_google_user(payload)
 
-        email = payload.get("email")
-        sub = payload.get("sub")
-        name = payload.get("name", "")
-        picture = payload.get("picture", "")
-
-        if not email or not sub:
-            raise GraphQLError("Invalid Google account data")
-
-        # 1. Get or create user
-        user, created = User.objects.get_or_create(
-            email=email,
-            defaults={
-                "name": name,
-                "avatar": picture,
-                "trust_score": 60,
-            },
-        )
-
-        # 2. Ensure SocialAccount exists (THIS replaces complete_social_login)
-        SocialAccount.objects.get_or_create(
-            user=user,
-            provider="google",
-            uid=sub,
-            defaults={"extra_data": payload},
-        )
-
-        # 3. Assign default role on first signup
-        if created:
-            buyer_role = Role.objects.get(name=Role.BUYER)
-            user.roles.add(buyer_role)
-
-        # 4. Log user in (required for JWT)
+        # Establish session (optional but harmless)
         request = info.context
         login(request, user, backend="django.contrib.auth.backends.ModelBackend")
 
-        # 5. Issue JWT
-        token = get_token(user)
-
-        return VerifyGoogleToken(access=token, user=user)
+        access = get_access_token(user)
+        refresh = get_refresh_token(user)
+        return VerifyGoogleToken(access=access, refresh=refresh, user=user)
 
 # =====================
 # USER MUTATIONS
@@ -194,15 +241,14 @@ class UpdateUserLocation(graphene.Mutation):
     def mutate(self, info, latitude, longitude, is_preferred):
         user = info.context.user
 
-        location = Location.objects.create(
-            latitude=latitude,
-            longitude=longitude,
-            is_preferred=is_preferred,
+        # Upsert user's current location (UserLocation is OneToOne)
+        location, _ = UserLocation.objects.update_or_create(
             user=user,
+            defaults={
+                "latitude": latitude,
+                "longitude": longitude,
+            },
         )
-
-        # user.location = location
-        user.save(update_fields=["location"])
 
         return UpdateUserLocation(location=location)
 
@@ -215,10 +261,14 @@ class BecomeRunner(graphene.Mutation):
         user = info.context.user
         runner_role = Role.objects.get(name=Role.RUNNER)
 
-        if user.roles.filter(id=runner_role.id).exists():
+        profile = getattr(user, "profile", None)
+        if not profile:
+            profile = UserProfile.objects.create(user=user)
+
+        if profile.roles.filter(id=runner_role.id).exists():
             return BecomeRunner(ok=True)
 
-        user.roles.add(runner_role)
+        profile.roles.add(runner_role)
         return BecomeRunner(ok=True)
 
 # =====================
@@ -226,22 +276,50 @@ class BecomeRunner(graphene.Mutation):
 # =====================
 
 class CreateErrand(graphene.Mutation):
-    class Arguments:
-        title = graphene.String(required=True)
-        description = graphene.String(required=True)
-        pickup_latitude = graphene.Float(required=True)
-        pickup_longitude = graphene.Float(required=True)
-        dropoff_latitude = graphene.Float(required=True)
-        dropoff_longitude = graphene.Float(required=True)
-        budget = graphene.Decimal(required=True)
+    errand_id = graphene.ID()
 
-    errand = graphene.Field(ErrandType)
+    class Arguments:
+        type = graphene.String(required=True)
+        instructions = graphene.String(required=True)
+        speed = graphene.String(required=True)
+        payment_method = graphene.String(required=True)
+        go_to = graphene.JSONString(required=True)
+        return_to = graphene.JSONString(required=False)
+        image_base64 = graphene.String(required=False)
 
     @login_required
-    def mutate(self, info, **kwargs):
+    def mutate(self, info, **data):
         user = info.context.user
-        errand = Errand.objects.create(requester=user, **kwargs)
-        return CreateErrand(errand=errand)
+
+        errand = Errand.objects.create(
+            user=user,
+            type=data["type"],
+            instructions=data["instructions"],
+            speed=data["speed"],
+            payment_method=data["payment_method"],
+        )
+
+        # Optional image
+        if data.get("image_base64"):
+            image_url = store_errand_image(data["image_base64"], user)
+            errand.image_url = image_url
+            errand.save(update_fields=["image_url"])
+
+        ErrandLocation.objects.create(
+            errand=errand,
+            kind="GO_TO",
+            **data["go_to"]
+        )
+
+        if data.get("return_to"):
+            ErrandLocation.objects.create(
+                errand=errand,
+                kind="RETURN_TO",
+                **data["return_to"]
+            )
+
+        return CreateErrand(errand_id=errand.id)
+
 
 
 class UpdateErrand(graphene.Mutation):
@@ -258,7 +336,7 @@ class UpdateErrand(graphene.Mutation):
     def mutate(self, info, id, **updates):
         errand = Errand.objects.get(pk=id)
 
-        if errand.requester != info.context.user:
+        if errand.user != info.context.user:
             raise GraphQLError("Not permitted")
 
         for field, value in updates.items():
@@ -279,7 +357,7 @@ class DeleteErrand(graphene.Mutation):
     def mutate(self, info, id):
         errand = Errand.objects.get(pk=id)
 
-        if errand.requester != info.context.user:
+        if errand.user != info.context.user:
             raise GraphQLError("Not permitted")
 
         errand.delete()
@@ -312,8 +390,9 @@ class Mutation(graphene.ObjectType):
     verify_token = graphql_jwt.Verify.Field()
     refresh_token = graphql_jwt.Refresh.Field()
 
-    # Google Auth
+    # Google Auth (no frontend token verification; use backend allauth + session tokens)
     verify_google_token = VerifyGoogleToken.Field()
+    issue_session_tokens = IssueSessionTokens.Field()
 
     # User
     update_user_location = UpdateUserLocation.Field()
@@ -321,6 +400,7 @@ class Mutation(graphene.ObjectType):
 
     # Errands
     create_errand = CreateErrand.Field()
+    save_errand_draft = SaveErrandDraft.Field()
     update_errand = UpdateErrand.Field()
     delete_errand = DeleteErrand.Field()
 

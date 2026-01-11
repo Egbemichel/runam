@@ -1,35 +1,42 @@
+from django.contrib.auth import get_user_model
 from django.db import models
-from django.conf import settings
+from django.utils import timezone
 
+User = get_user_model()
 
 class Errand(models.Model):
-    STATUS_CHOICES = [
-        ('PENDING', 'Pending'),
-        ('ASSIGNED', 'Assigned'),
-        ('COMPLETED', 'Completed'),
-        ('CANCELLED', 'Cancelled'),
-    ]
+    class Type(models.TextChoices):
+        ONE_WAY = "ONE_WAY"
+        ROUND_TRIP = "ROUND_TRIP"
 
-    requester = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='errands'
-    )
-    title = models.CharField(max_length=255)
-    description = models.TextField()
+    class Status(models.TextChoices):
+        PENDING = "PENDING" # open, searching for runners
+        IN_PROGRESS = "IN_PROGRESS" # accepted by a runner
+        COMPLETED = "COMPLETED"
+        CANCELLED = "CANCELLED"
+        EXPIRED = "EXPIRED"
 
-    pickup_latitude = models.FloatField()
-    pickup_longitude = models.FloatField()
-    dropoff_latitude = models.FloatField()
-    dropoff_longitude = models.FloatField()
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    type = models.CharField(max_length=20, choices=Type.choices)
+    instructions = models.TextField()
+    speed = models.CharField(max_length=10)
+    payment_method = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
-    budget = models.DecimalField(max_digits=10, decimal_places=2)
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default='PENDING'
-    )
+    # Optional image
+    image_url = models.URLField(blank=True, null=True)
+
+    # Open window for runner acceptance
+    is_open = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
-        return f"{self.title} - {self.requester.username}"
+    def refresh_open_state(self):
+        """Toggle is_open and status to EXPIRED if past expires_at and not terminal."""
+        if self.expires_at and self.status not in [self.Status.COMPLETED, self.Status.CANCELLED, self.Status.EXPIRED]:
+            if timezone.now() >= self.expires_at:
+                self.is_open = False
+                self.status = self.Status.EXPIRED
+                self.save(update_fields=["is_open", "status", "updated_at"])

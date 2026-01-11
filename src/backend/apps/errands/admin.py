@@ -4,6 +4,6 @@ from .models import Errand
 
 @admin.register(Errand)
 class ErrandAdmin(admin.ModelAdmin):
-    list_display = ('id', 'title', 'requester', 'status', 'budget', 'created_at')
-    list_filter = ('status',)
-    search_fields = ('title', 'description', 'requester__username')
+    list_display = ('id', 'user', 'type', 'instructions', 'speed', 'payment_method', 'status', 'created_at')
+    list_filter = ('status','type')
+    search_fields = ('instructions','user__email',)

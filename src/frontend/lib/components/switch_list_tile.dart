@@ -3,6 +3,9 @@ import 'package:get/get.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:runam/app/theme.dart';
 import '../controllers/auth_controller.dart';
+import '../controllers/location_controller.dart';
+import '../models/place_models.dart';
+import '../services/mapbox_service.dart';
 
 class ProfileSwitchListTile extends StatefulWidget {
   final bool isAuth;
@@ -14,8 +17,13 @@ class ProfileSwitchListTile extends StatefulWidget {
 }
 
 class _ProfileSwitchListTileState extends State<ProfileSwitchListTile> {
-  bool _useCurrentLocation = false;
   late final AuthController authController;
+  final locationController = Get.find<LocationController>();
+  final mapboxService = MapboxService();
+
+  final TextEditingController _searchController = TextEditingController();
+  final RxList<Place> _results = <Place>[].obs;
+
 
   @override
   void initState() {
@@ -37,12 +45,16 @@ class _ProfileSwitchListTileState extends State<ProfileSwitchListTile> {
               fontWeight: FontWeight.bold,
             ),
           ),
-          trailing: Switch.adaptive(
-            value: _useCurrentLocation,
-            activeColor: AppTheme.primary700,
-            onChanged: (value) {
-              setState(() => _useCurrentLocation = value);
-            },
+          trailing: Obx(() {
+              return Switch.adaptive(
+                value: locationController.locationMode.value == LocationMode.device,
+                onChanged: (value) {
+                  value
+                      ? locationController.switchToDevice()
+                      : locationController.locationMode.value = LocationMode.static;
+                },
+              );
+            }
           ),
         ),
 
@@ -53,53 +65,108 @@ class _ProfileSwitchListTileState extends State<ProfileSwitchListTile> {
           return AnimatedSize(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
-            child: _useCurrentLocation || (widget.isAuth && !isBuyer)
+            child: (widget.isAuth && !isBuyer) ||
+                locationController.locationMode.value != LocationMode.static
                 ? const SizedBox.shrink()
                 : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 12),
+
                 TextField(
+                  controller: _searchController,
+                  onChanged: (query) async {
+                    if (query.length < 3) {
+                      _results.clear();
+                      return;
+                    }
+
+                    final places = await mapboxService.searchPlaces(query);
+                    _results.assignAll(places);
+                  },
                   decoration: InputDecoration(
                     hintText: 'Enter your preferred location',
-                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
-                    suffixIcon: const Icon(
-                      IconsaxPlusLinear.gps,
-                      color: Colors.grey,
-                      size: 20,
-                    ),
+                    suffixIcon: const Icon(IconsaxPlusLinear.gps),
                     filled: true,
                     fillColor: const Color(0xFFF8F9FA),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 10,
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(30),
                       borderSide: BorderSide.none,
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 12),
+
+                /// Autocomplete results (already wired)
+                Obx(() {
+                  if (_results.isEmpty) return const SizedBox.shrink();
+
+                  return ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _results.length,
+                    itemBuilder: (context, index) {
+                      final place = _results[index];
+
+                      return ListTile(
+                        leading: const Icon(Icons.location_on),
+                        title: Text(place.name),
+                        subtitle: Text(place.formattedAddress),
+                        onTap: () {
+                          locationController.switchToStatic(place);
+                          authController.syncLocation();
+
+                          _searchController.text = place.name;
+                          _results.clear();
+                          FocusScope.of(context).unfocus();
+                        },
+                      );
+                    },
+                  );
+                }),
               ],
             ),
           );
+
         }),
 
         const SizedBox(height: 8),
 
         /// 🔥 Clean reactive text
         Obx(() {
-          final isRunner = authController.userRoles.contains('Runner');
+          if (_results.isEmpty) return const SizedBox.shrink();
 
-          return Text(
-            widget.isAuth && isRunner
-                ? "Buyers use this location to find nearby runners. Turning it off means no errands coming your way."
-                : "This location is the same which runners will deliver to and get paid at for round-trip errands.",
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 12,
-              height: 1.4,
-            ),
+          return ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _results.length,
+            itemBuilder: (context, index) {
+              final place = _results[index];
+
+              return ListTile(
+                leading: const Icon(Icons.location_on),
+                title: Text(place.name),
+                subtitle: Text(place.formattedAddress),
+                onTap: () {
+                  // ✅ THIS IS WHERE onTap GOES
+                  locationController.switchToStatic(place);
+
+                  authController.syncLocation();
+
+                  _searchController.text = place.name;
+                  _results.clear();
+                  FocusScope.of(context).unfocus();
+                },
+              );
+            },
           );
         }),
+
 
         const SizedBox(height: 16),
       ],

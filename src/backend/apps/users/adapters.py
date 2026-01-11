@@ -1,39 +1,60 @@
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.db import transaction
 
+from apps.users.models import UserProfile
+from apps.roles.models import Role
+
+
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
 
     def populate_user(self, request, sociallogin, data):
         """
-        Google → User fields (before save)
+        Map Google → built-in User fields (before save)
         """
         user = super().populate_user(request, sociallogin, data)
-
         extra = sociallogin.account.extra_data
 
+        # Built-in User fields
         user.email = extra.get('email')
-        user.name = extra.get('name')  # Google gives full name
-        user.avatar = extra.get('picture')
+        full_name = extra.get('name') or ''
+        if full_name:
+            parts = full_name.split(' ', 1)
+            user.first_name = parts[0]
+            user.last_name = parts[1] if len(parts) > 1 else ''
 
         return user
 
     @transaction.atomic
     def save_user(self, request, sociallogin, form=None):
         """
-        App defaults (after user exists)
+        After user exists: ensure profile, set defaults, assign role
         """
         user = super().save_user(request, sociallogin, form)
+        extra = sociallogin.account.extra_data or {}
 
-        # ---- DEFAULT ROLE ----
-        if not user.roles.exists():
-            from apps.roles.models import Role
-            default_role = Role.objects.get(name=Role.BUYER)
-            user.roles.add(default_role)
+        # Ensure a profile exists
+        profile, _ = UserProfile.objects.get_or_create(user=user)
 
-        # ---- DEFAULT TRUST SCORE ----
-        if user.trust_score is None:
-            user.trust_score = 60
+        # Avatar from Google
+        if not profile.avatar:
+            profile.avatar = extra.get('picture')
 
+        # Default trust score
+        if profile.trust_score is None:
+            profile.trust_score = 60
+
+        # Default role assignment on first signup
+        if profile.roles.count() == 0:
+            try:
+                default_role = Role.objects.get(name=Role.BUYER)
+                profile.roles.add(default_role)
+            except Role.DoesNotExist:
+                # Roles not seeded yet; skip silently
+                pass
+
+        profile.save()
+
+        # Activate user
         user.is_active = True
-        user.save()
+        user.save(update_fields=["is_active", "first_name", "last_name"])  # names may have been set
         return user

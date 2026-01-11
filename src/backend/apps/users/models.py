@@ -1,36 +1,29 @@
-import uuid
-
-from django.contrib.auth.base_user import AbstractBaseUser
-from django.contrib.auth.models import PermissionsMixin
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
-from .managers import UserManager
 
+User = get_user_model()
+class UserProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
 
-class User(AbstractBaseUser, PermissionsMixin):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    email = models.EmailField(unique=True)
-    name = models.CharField(max_length=255, null=True, blank=True)
+    # Moved attributes from custom User
     avatar = models.URLField(blank=True, null=True)
-
-    roles = models.ManyToManyField(
-        "roles.Role",
-        related_name="users",
-        blank=True,
-    )
-
     trust_score = models.PositiveSmallIntegerField(default=60)
 
-    is_active = models.BooleanField(default=True)
-    is_staff = models.BooleanField(default=False)
+    # Optional extras
+    phone = models.CharField(max_length=32, blank=True, null=True)
+    date_of_birth = models.DateField(blank=True, null=True)
+
+    # Roles association (attach to profile to avoid touching built-in User)
+    roles = models.ManyToManyField(
+        'roles.Role',
+        related_name='user_profiles',
+        blank=True,
+    )
 
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
-    USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = []
-
-    objects = UserManager()
-
     def __str__(self):
-        return self.email
+        return f"Profile({self.user.email})"
