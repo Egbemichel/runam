@@ -55,7 +55,9 @@ class _HomeScreenState extends State<HomeScreen> {
     geo.LocationPermission permission =
     await geo.Geolocator.requestPermission();
     if (permission == geo.LocationPermission.denied ||
-        permission == geo.LocationPermission.deniedForever) return;
+        permission == geo.LocationPermission.deniedForever) {
+      return;
+    }
 
     final geo.Position initialPos =
     await geo.Geolocator.getCurrentPosition();

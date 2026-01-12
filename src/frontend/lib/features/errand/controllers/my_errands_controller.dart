@@ -149,6 +149,7 @@ class MyErrandsController extends GetxController {
   }
 
   /// Refresh errands from server
+  @override
   Future<void> refresh() async {
     await fetchErrands();
   }

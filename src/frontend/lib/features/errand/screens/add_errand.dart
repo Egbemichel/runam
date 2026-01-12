@@ -724,7 +724,7 @@ class _AddErrandScreenState extends State<AddErrandScreen>
   Widget _buildSpeedDropdown() {
     return DropdownButtonFormField<String>(
       decoration: _inputDecoration("Speed"),
-      value: selectedSpeed,
+      initialValue: selectedSpeed,
       items: const [
         DropdownMenuItem(value: "10", child: Text("10 mins")),
         DropdownMenuItem(value: "15", child: Text("15 mins")),

@@ -13,7 +13,6 @@ import '../models/user_location.dart';
 import '../services/auth_service.dart';
 import '../services/graphql_client.dart';
 import 'location_controller.dart';
-import 'location_controller.dart';
 
 /// AuthController handles authentication using OAuth token exchange pattern:
 /// 1. Flutter handles Google Sign-In natively
