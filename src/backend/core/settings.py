@@ -55,6 +55,8 @@ INSTALLED_APPS = [
     'apps.locations.apps.LocationsConfig',
     'apps.roles.apps.RolesConfig',
     'apps.trust.apps.TrustConfig',
+    'apps.escrow.apps.EscrowConfig',
+    'apps.payments.apps.PaymentsConfig',
     'errand_location'
 
 ]
@@ -188,3 +190,15 @@ STORAGE_MODE = os.getenv('STORAGE_MODE', 'local' if DEBUG else 'supabase')
 SUPABASE_URL = os.getenv('SUPABASE_URL', '')
 SUPABASE_BUCKET = os.getenv('SUPABASE_BUCKET', 'public')
 SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
+
+# -------------------------------------------------------------------
+# Flutterwave Payment Gateway
+# -------------------------------------------------------------------
+FLUTTERWAVE_SECRET_KEY = os.getenv('FLUTTERWAVE_SECRET_KEY', '')
+FLUTTERWAVE_PUBLIC_KEY = os.getenv('FLUTTERWAVE_PUBLIC_KEY', '')
+FLUTTERWAVE_ENCRYPTION_KEY = os.getenv('FLUTTERWAVE_ENCRYPTION_KEY', '')
+FLUTTERWAVE_SECRET_HASH = os.getenv('FLUTTERWAVE_SECRET_HASH', '')  # For webhook signature verification
+FLUTTERWAVE_CURRENCY = os.getenv('FLUTTERWAVE_CURRENCY', 'NGN')
+FLUTTERWAVE_TEST_MODE = os.getenv('FLUTTERWAVE_TEST_MODE', 'True').lower() == 'true'
+FLUTTERWAVE_LOGO_URL = os.getenv('FLUTTERWAVE_LOGO_URL', '')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')

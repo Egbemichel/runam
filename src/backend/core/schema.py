@@ -24,6 +24,14 @@ from apps.escrow.models import Escrow
 from apps.escrow.services import handle_errand_status_change
 from errand_location.models import ErrandLocation
 
+# Import Flutterwave service
+try:
+    from apps.payments.flutterwave_service import flutterwave_service
+    FLUTTERWAVE_AVAILABLE = True
+except ImportError:
+    FLUTTERWAVE_AVAILABLE = False
+    flutterwave_service = None
+
 User = get_user_model()
 
 # =====================
@@ -122,6 +130,28 @@ class UserType(DjangoObjectType):
     def resolve_trust_score(self, info):
         profile = getattr(self, "profile", None)
         return getattr(profile, "trust_score", None) if profile else None
+    
+    bank_account = graphene.JSONString()
+    
+    def resolve_bank_account(self, info):
+        """Get user's bank account details (masked for security)"""
+        profile = getattr(self, "profile", None)
+        if not profile:
+            return None
+        
+        if not all([profile.bank_account_number, profile.bank_code, profile.bank_account_name]):
+            return None
+        
+        # Mask account number for security (show last 4 digits only)
+        account_number = profile.bank_account_number
+        masked_account = '*' * (len(account_number) - 4) + account_number[-4:] if len(account_number) > 4 else '****'
+        
+        return {
+            'account_number': masked_account,
+            'bank_code': profile.bank_code,
+            'account_name': profile.bank_account_name,
+            'has_account': True
+        }
 
 class EscrowType(DjangoObjectType):
     buyer = graphene.Field(UserType)
@@ -573,6 +603,242 @@ class AcceptErrand(graphene.Mutation):
         return AcceptErrand(errand=errand)
 
 
+# =====================
+# PAYMENT MUTATIONS
+# =====================
+
+class InitializePayment(graphene.Mutation):
+    """Initialize Flutterwave payment for an escrow"""
+    payment_link = graphene.String()
+    transaction_id = graphene.String()
+    tx_ref = graphene.String()
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        escrow_id = graphene.ID(required=True)
+
+    @login_required
+    def mutate(self, info, escrow_id):
+        user = info.context.user
+        
+        try:
+            escrow = Escrow.objects.get(pk=escrow_id)
+            
+            # Verify user is the buyer
+            if escrow.buyer != user:
+                raise GraphQLError("Not permitted. Only the buyer can initialize payment.")
+            
+            # Check if escrow is in valid state
+            if escrow.status != Escrow.Status.PENDING:
+                raise GraphQLError(f"Cannot initialize payment for escrow with status {escrow.status}")
+            
+            if not FLUTTERWAVE_AVAILABLE or not flutterwave_service:
+                raise GraphQLError("Payment gateway not configured")
+            
+            import uuid
+            tx_ref = f"ESCROW_{escrow.id}_{uuid.uuid4().hex[:8]}"
+            buyer_email = escrow.buyer.email
+            buyer_name = getattr(escrow.buyer, 'first_name', '') or buyer_email.split('@')[0]
+            
+            payment_result = flutterwave_service.initialize_payment(
+                amount=escrow.amount,
+                email=buyer_email,
+                tx_ref=tx_ref,
+                customer_name=buyer_name,
+                meta={
+                    'escrow_id': str(escrow.id),
+                    'errand_id': str(escrow.errand.id),
+                    'buyer_id': str(escrow.buyer.id),
+                    'runner_id': str(escrow.runner.id) if escrow.runner else None
+                }
+            )
+            
+            # Update escrow with transaction ID
+            escrow.transaction_id = payment_result.get('transaction_id') or tx_ref
+            escrow.save(update_fields=['transaction_id'])
+            
+            return InitializePayment(
+                payment_link=payment_result.get('payment_link'),
+                transaction_id=payment_result.get('transaction_id', ''),
+                tx_ref=tx_ref,
+                success=True,
+                message="Payment initialized successfully"
+            )
+            
+        except Escrow.DoesNotExist:
+            raise GraphQLError("Escrow not found")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to initialize payment: {e}", exc_info=True)
+            raise GraphQLError(f"Failed to initialize payment: {str(e)}")
+
+
+class VerifyPayment(graphene.Mutation):
+    """Verify a Flutterwave payment transaction"""
+    success = graphene.Boolean()
+    message = graphene.String()
+    transaction_id = graphene.String()
+    amount = graphene.Decimal()
+    payment_status = graphene.String()
+
+    class Arguments:
+        transaction_id = graphene.String(required=True)
+        escrow_id = graphene.ID(required=True)
+
+    @login_required
+    def mutate(self, info, transaction_id, escrow_id):
+        user = info.context.user
+        
+        try:
+            escrow = Escrow.objects.get(pk=escrow_id)
+            
+            # Verify user is the buyer
+            if escrow.buyer != user:
+                raise GraphQLError("Not permitted. Only the buyer can verify payment.")
+            
+            if not FLUTTERWAVE_AVAILABLE or not flutterwave_service:
+                raise GraphQLError("Payment gateway not configured")
+            
+            verification_result = flutterwave_service.verify_payment(transaction_id)
+            
+            # Update escrow with verified transaction ID
+            if verification_result.get('payment_status') == 'successful':
+                escrow.transaction_id = transaction_id
+                escrow.save(update_fields=['transaction_id'])
+            
+            return VerifyPayment(
+                success=verification_result.get('payment_status') == 'successful',
+                message=f"Payment status: {verification_result.get('payment_status')}",
+                transaction_id=transaction_id,
+                amount=verification_result.get('amount', escrow.amount),
+                payment_status=verification_result.get('payment_status', 'unknown')
+            )
+            
+        except Escrow.DoesNotExist:
+            raise GraphQLError("Escrow not found")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to verify payment: {e}", exc_info=True)
+            raise GraphQLError(f"Failed to verify payment: {str(e)}")
+
+
+class TransferToRunner(graphene.Mutation):
+    """Transfer escrow funds to runner's bank account"""
+    success = graphene.Boolean()
+    message = graphene.String()
+    transfer_id = graphene.String()
+
+    class Arguments:
+        escrow_id = graphene.ID(required=True)
+        account_number = graphene.String(required=False)
+        bank_code = graphene.String(required=False)
+        account_name = graphene.String(required=False)
+        use_saved_account = graphene.Boolean(default_value=False)
+
+    @login_required
+    def mutate(self, info, escrow_id, account_number=None, bank_code=None, account_name=None, use_saved_account=False):
+        user = info.context.user
+        
+        try:
+            escrow = Escrow.objects.get(pk=escrow_id)
+            
+            # Verify user is authorized (buyer or admin)
+            if escrow.buyer != user and not user.is_staff:
+                raise GraphQLError("Not permitted")
+            
+            # Check escrow status
+            if escrow.status != Escrow.Status.PENDING:
+                raise GraphQLError(f"Cannot transfer funds for escrow with status {escrow.status}")
+            
+            if not escrow.runner:
+                raise GraphQLError("No runner assigned to this escrow")
+            
+            if not FLUTTERWAVE_AVAILABLE or not flutterwave_service:
+                raise GraphQLError("Payment gateway not configured")
+            
+            # Get bank account details
+            if use_saved_account:
+                # Use runner's saved bank account
+                runner_profile = getattr(escrow.runner, 'profile', None)
+                if not runner_profile:
+                    raise GraphQLError("Runner profile not found")
+                
+                account_number = runner_profile.bank_account_number
+                bank_code = runner_profile.bank_code
+                account_name = runner_profile.bank_account_name
+                
+                if not all([account_number, bank_code, account_name]):
+                    raise GraphQLError("Runner has not set up bank account details")
+            else:
+                # Use provided account details
+                if not all([account_number, bank_code, account_name]):
+                    raise GraphQLError("Account details are required if not using saved account")
+            
+            import uuid
+            transfer_result = flutterwave_service.transfer_funds(
+                amount=escrow.amount,
+                recipient_account_number=account_number,
+                recipient_bank_code=bank_code,
+                recipient_name=account_name,
+                narration=f"Payment for errand {escrow.errand.id}",
+                reference=f"TRF_{escrow.id}_{uuid.uuid4().hex[:8]}"
+            )
+            
+            # Release escrow with transfer ID
+            escrow.release(transaction_id=transfer_result.get('transfer_id'))
+            
+            return TransferToRunner(
+                success=True,
+                message="Funds transferred successfully",
+                transfer_id=transfer_result.get('transfer_id', '')
+            )
+            
+        except Escrow.DoesNotExist:
+            raise GraphQLError("Escrow not found")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to transfer funds: {e}", exc_info=True)
+            raise GraphQLError(f"Failed to transfer funds: {str(e)}")
+
+
+class UpdateBankAccount(graphene.Mutation):
+    """Update user's bank account details for receiving payments"""
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    class Arguments:
+        account_number = graphene.String(required=True)
+        bank_code = graphene.String(required=True)
+        account_name = graphene.String(required=True)
+
+    @login_required
+    def mutate(self, info, account_number, bank_code, account_name):
+        user = info.context.user
+        
+        try:
+            from apps.users.models import UserProfile
+            
+            profile, created = UserProfile.objects.get_or_create(user=user)
+            profile.bank_account_number = account_number
+            profile.bank_code = bank_code
+            profile.bank_account_name = account_name
+            profile.save(update_fields=['bank_account_number', 'bank_code', 'bank_account_name', 'updated_at'])
+            
+            return UpdateBankAccount(
+                success=True,
+                message="Bank account details updated successfully"
+            )
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to update bank account: {e}", exc_info=True)
+            raise GraphQLError(f"Failed to update bank account: {str(e)}")
+
+
 class DeleteErrand(graphene.Mutation):
     class Arguments:
         id = graphene.ID(required=True)
@@ -626,6 +892,23 @@ class Query(graphene.ObjectType):
             return errand.escrow
         except Escrow.DoesNotExist:
             return None
+    
+    banks = graphene.List(graphene.JSONString, country=graphene.String(default_value='NG'))
+    
+    @login_required
+    def resolve_banks(self, info, country='NG'):
+        """Get list of banks for a country (for Flutterwave transfers)"""
+        if not FLUTTERWAVE_AVAILABLE or not flutterwave_service:
+            raise GraphQLError("Payment gateway not configured")
+        
+        try:
+            banks_result = flutterwave_service.get_banks(country)
+            return banks_result.get('banks', [])
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to fetch banks: {e}", exc_info=True)
+            raise GraphQLError(f"Failed to fetch banks: {str(e)}")
 
 # =====================
 # ROOT SCHEMA
@@ -653,6 +936,12 @@ class Mutation(graphene.ObjectType):
     update_errand = UpdateErrand.Field()
     accept_errand = AcceptErrand.Field()
     delete_errand = DeleteErrand.Field()
+    
+    # Payments
+    initialize_payment = InitializePayment.Field()
+    verify_payment = VerifyPayment.Field()
+    transfer_to_runner = TransferToRunner.Field()
+    update_bank_account = UpdateBankAccount.Field()
 
 
 schema = graphene.Schema(query=Query, mutation=Mutation)

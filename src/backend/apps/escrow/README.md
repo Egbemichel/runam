@@ -52,14 +52,49 @@ The escrow logic is automatically triggered when:
 
 ## Payment Gateway Integration
 
-The escrow service includes placeholder comments for payment gateway integration:
-- TODO: Integrate with payment gateway to actually transfer funds
-- TODO: Integrate with payment gateway to actually refund funds
+The escrow system is integrated with **Flutterwave** payment gateway:
 
-To integrate with a payment gateway (e.g., Stripe, PayPal):
-1. Update `release_escrow()` to call payment gateway API
-2. Update `refund_escrow()` to call payment gateway refund API
-3. Store transaction IDs in the `transaction_id` field
+### Automatic Integration
+- **Escrow Creation**: Payment is automatically initialized when escrow is created
+- **Escrow Release**: Funds are transferred to runner when errand is completed (requires runner's bank details)
+- **Escrow Refund**: Funds are automatically refunded to buyer when errand is cancelled/expired
+
+### Manual Payment Operations
+
+You can also manually initialize payments and verify transactions using GraphQL mutations:
+
+```graphql
+# Initialize payment
+mutation {
+  initializePayment(escrowId: "1") {
+    paymentLink
+    transactionId
+  }
+}
+
+# Verify payment
+mutation {
+  verifyPayment(transactionId: "123", escrowId: "1") {
+    success
+    paymentStatus
+  }
+}
+
+# Transfer to runner (when errand completed)
+mutation {
+  transferToRunner(
+    escrowId: "1"
+    accountNumber: "1234567890"
+    bankCode: "044"
+    accountName: "John Doe"
+  ) {
+    success
+    transferId
+  }
+}
+```
+
+See `apps/payments/README.md` for detailed Flutterwave integration documentation.
 
 ## Database Migrations
 

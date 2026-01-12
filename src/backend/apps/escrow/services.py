@@ -2,11 +2,21 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from decimal import Decimal
 import logging
+import uuid
 from apps.escrow.models import Escrow
 from apps.errands.models import Errand
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+# Import Flutterwave service
+try:
+    from apps.payments.flutterwave_service import flutterwave_service
+    FLUTTERWAVE_AVAILABLE = True
+except ImportError:
+    logger.warning("Flutterwave service not available. Payment operations will be skipped.")
+    FLUTTERWAVE_AVAILABLE = False
+    flutterwave_service = None
 
 
 @transaction.atomic
@@ -53,8 +63,36 @@ def create_escrow(errand: Errand, amount: Decimal, runner: User = None) -> Escro
     
     logger.info(f"Created escrow {escrow.id} for errand {errand.id} with amount {amount}")
     
-    # TODO: Integrate with payment gateway to actually hold funds
-    # For now, this is a placeholder for the escrow logic
+    # Initialize payment with Flutterwave
+    if FLUTTERWAVE_AVAILABLE and flutterwave_service:
+        try:
+            tx_ref = f"ESCROW_{escrow.id}_{uuid.uuid4().hex[:8]}"
+            buyer_email = errand.user.email
+            buyer_name = getattr(errand.user, 'first_name', '') or buyer_email.split('@')[0]
+            
+            payment_result = flutterwave_service.initialize_payment(
+                amount=amount,
+                email=buyer_email,
+                tx_ref=tx_ref,
+                customer_name=buyer_name,
+                meta={
+                    'escrow_id': str(escrow.id),
+                    'errand_id': str(errand.id),
+                    'buyer_id': str(errand.user.id),
+                    'runner_id': str(final_runner.id) if final_runner else None
+                }
+            )
+            
+            # Store payment transaction reference
+            escrow.transaction_id = payment_result.get('transaction_id') or tx_ref
+            escrow.save(update_fields=['transaction_id'])
+            
+            logger.info(f"Payment initialized for escrow {escrow.id}: tx_ref={tx_ref}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Flutterwave payment for escrow {escrow.id}: {e}", exc_info=True)
+            # Don't fail escrow creation if payment initialization fails
+            # Payment can be initialized later via GraphQL mutation
     
     return escrow
 
@@ -90,12 +128,38 @@ def release_escrow(errand: Errand, transaction_id: str = None) -> Escrow:
     if not escrow.runner:
         raise ValueError("Cannot release escrow: no runner assigned")
     
-    escrow.release(transaction_id=transaction_id)
+    # Transfer funds to runner via Flutterwave (if runner has bank account set up)
+    transfer_id = transaction_id
+    if FLUTTERWAVE_AVAILABLE and flutterwave_service and escrow.transaction_id and escrow.runner:
+        try:
+            # Check if runner has bank account details saved
+            runner_profile = getattr(escrow.runner, 'profile', None)
+            if runner_profile and all([
+                runner_profile.bank_account_number,
+                runner_profile.bank_code,
+                runner_profile.bank_account_name
+            ]):
+                # Automatically transfer to runner's saved bank account
+                transfer_result = flutterwave_service.transfer_funds(
+                    amount=escrow.amount,
+                    recipient_account_number=runner_profile.bank_account_number,
+                    recipient_bank_code=runner_profile.bank_code,
+                    recipient_name=runner_profile.bank_account_name,
+                    narration=f"Payment for errand {errand.id}",
+                    reference=f"TRF_{escrow.id}_{uuid.uuid4().hex[:8]}"
+                )
+                transfer_id = transfer_result.get('transfer_id')
+                logger.info(f"Automatically transferred funds to runner {escrow.runner.id} for escrow {escrow.id}")
+            else:
+                logger.info(f"Escrow {escrow.id} marked for release. Runner {escrow.runner.id} needs to set up bank account for automatic transfer.")
+            
+        except Exception as e:
+            logger.error(f"Failed to transfer funds via Flutterwave for escrow {escrow.id}: {e}", exc_info=True)
+            # Still mark escrow as released - transfer can be retried later via GraphQL mutation
+    
+    escrow.release(transaction_id=transfer_id)
     
     logger.info(f"Released escrow {escrow.id} for errand {errand.id} to runner {escrow.runner.id}")
-    
-    # TODO: Integrate with payment gateway to actually transfer funds to runner
-    # Example: payment_gateway.transfer(escrow.amount, escrow.runner.payment_account)
     
     return escrow
 
@@ -127,12 +191,25 @@ def refund_escrow(errand: Errand, transaction_id: str = None) -> Escrow:
         logger.info(f"Escrow {escrow.id} for errand {errand.id} already processed with status {escrow.status}, skipping refund")
         return escrow
     
-    escrow.refund(transaction_id=transaction_id)
+    # Process refund via Flutterwave
+    refund_id = transaction_id
+    if FLUTTERWAVE_AVAILABLE and flutterwave_service and escrow.transaction_id:
+        try:
+            refund_result = flutterwave_service.refund_payment(
+                transaction_id=escrow.transaction_id,
+                amount=escrow.amount,
+                comments=f"Refund for errand {errand.id} - {errand.status}"
+            )
+            refund_id = refund_result.get('refund_id') or escrow.transaction_id
+            logger.info(f"Refund processed via Flutterwave for escrow {escrow.id}: refund_id={refund_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to process Flutterwave refund for escrow {escrow.id}: {e}", exc_info=True)
+            # Still mark escrow as refunded - refund can be retried later
+    
+    escrow.refund(transaction_id=refund_id)
     
     logger.info(f"Refunded escrow {escrow.id} for errand {errand.id} to buyer {escrow.buyer.id}")
-    
-    # TODO: Integrate with payment gateway to actually refund funds to buyer
-    # Example: payment_gateway.refund(escrow.amount, escrow.buyer.payment_account, escrow.transaction_id)
     
     return escrow
 

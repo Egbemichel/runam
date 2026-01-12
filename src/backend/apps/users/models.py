@@ -14,6 +14,11 @@ class UserProfile(models.Model):
     # Optional extras
     phone = models.CharField(max_length=32, blank=True, null=True)
     date_of_birth = models.DateField(blank=True, null=True)
+    
+    # Bank account details for payments (runners)
+    bank_account_number = models.CharField(max_length=20, blank=True, null=True, help_text="Bank account number")
+    bank_code = models.CharField(max_length=10, blank=True, null=True, help_text="Flutterwave bank code")
+    bank_account_name = models.CharField(max_length=255, blank=True, null=True, help_text="Account holder name")
 
     # Roles association (attach to profile to avoid touching built-in User)
     roles = models.ManyToManyField(
