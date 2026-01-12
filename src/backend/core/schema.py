@@ -1,11 +1,13 @@
 import graphene
 import graphql_jwt
 from django.contrib.auth import get_user_model
+from django.db import models as django_models
 from graphene import relay
 from graphene_django import DjangoObjectType
 from graphql import GraphQLError
 from graphql_jwt.decorators import login_required
 from django.contrib.auth import login
+from django.utils import timezone
 
 from apps.errands.models import Errand
 from apps.errands.services import store_errand_image
@@ -18,6 +20,8 @@ from apps.users.services import (
     get_access_token,
     get_refresh_token,
 )
+from apps.escrow.models import Escrow
+from apps.escrow.services import handle_errand_status_change
 from errand_location.models import ErrandLocation
 
 User = get_user_model()
@@ -119,8 +123,39 @@ class UserType(DjangoObjectType):
         profile = getattr(self, "profile", None)
         return getattr(profile, "trust_score", None) if profile else None
 
+class EscrowType(DjangoObjectType):
+    buyer = graphene.Field(UserType)
+    runner = graphene.Field(UserType)
+    amount = graphene.Decimal()
+
+    class Meta:
+        model = Escrow
+        interfaces = (relay.Node,)
+        fields = (
+            "id",
+            "errand",
+            "buyer",
+            "runner",
+            "amount",
+            "status",
+            "created_at",
+            "released_at",
+            "refunded_at",
+            "transaction_id",
+        )
+
+    def resolve_buyer(self, info):
+        return self.buyer
+    
+    def resolve_runner(self, info):
+        return self.runner
+
+
 class ErrandType(DjangoObjectType):
     locations = graphene.List(ErrandLocationType)
+    runner = graphene.Field(UserType)
+    price = graphene.Decimal()
+    escrow = graphene.Field(EscrowType)
 
     class Meta:
         model = Errand
@@ -135,10 +170,21 @@ class ErrandType(DjangoObjectType):
             "created_at",
             "image_url",
             "locations",
+            "price",
+            "runner",
         )
 
     def resolve_locations(self, info):
         return self.locations.all()
+    
+    def resolve_runner(self, info):
+        return self.runner
+    
+    def resolve_escrow(self, info):
+        try:
+            return self.escrow
+        except Escrow.DoesNotExist:
+            return None
 
 
 class SaveErrandDraft(graphene.Mutation):
@@ -331,6 +377,7 @@ class CreateErrand(graphene.Mutation):
         instructions = graphene.String(required=True)
         speed = graphene.String(required=True)
         payment_method = graphene.String(required=True)
+        price = graphene.Decimal(required=False)
         go_to = graphene.JSONString(required=True)
         return_to = graphene.JSONString(required=False)
         image_base64 = graphene.String(required=False)
@@ -345,6 +392,7 @@ class CreateErrand(graphene.Mutation):
             instructions=data["instructions"],
             speed=data["speed"],
             payment_method=data["payment_method"],
+            price=data.get("price"),
         )
 
         # Optional image
@@ -377,6 +425,7 @@ class UpdateErrand(graphene.Mutation):
         description = graphene.String()
         budget = graphene.Decimal()
         status = graphene.String()
+        price = graphene.Decimal()
 
     errand = graphene.Field(ErrandType)
 
@@ -393,6 +442,21 @@ class UpdateErrand(graphene.Mutation):
                 setattr(errand, field, value)
 
         errand.save()
+        
+        # Handle escrow logic when status changes
+        if 'status' in updates and updates['status'] != old_status:
+            try:
+                handle_errand_status_change(
+                    errand=errand,
+                    old_status=old_status,
+                    new_status=errand.status,
+                    runner=errand.runner
+                )
+            except Exception as e:
+                # Log error but don't fail the mutation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to handle escrow logic in UpdateErrand: {e}", exc_info=True)
         
         # Send notification if status changed
         if 'status' in updates and updates['status'] != old_status:
@@ -432,6 +496,83 @@ class UpdateErrand(graphene.Mutation):
         return UpdateErrand(errand=errand)
 
 
+class AcceptErrand(graphene.Mutation):
+    """Accept an errand as a runner - triggers escrow creation if price exists"""
+    errand = graphene.Field(ErrandType)
+
+    class Arguments:
+        errand_id = graphene.ID(required=True)
+
+    @login_required
+    def mutate(self, info, errand_id):
+        runner = info.context.user
+        errand = Errand.objects.get(pk=errand_id)
+
+        # Check if errand is available for acceptance
+        if errand.status != Errand.Status.PENDING:
+            raise GraphQLError(f"Errand is not available for acceptance. Current status: {errand.status}")
+        
+        # Check if errand is still open
+        if not errand.is_open:
+            raise GraphQLError("Errand is no longer open for acceptance")
+        
+        # Check if errand has expired
+        if errand.expires_at and timezone.now() >= errand.expires_at:
+            raise GraphQLError("Errand has expired")
+        
+        # Check if user is trying to accept their own errand
+        if errand.user == runner:
+            raise GraphQLError("You cannot accept your own errand")
+        
+        # Check if runner has runner role
+        from apps.roles.models import Role
+        runner_role = Role.objects.filter(name=Role.RUNNER).first()
+        if runner_role:
+            profile = getattr(runner, "profile", None)
+            if not profile or not profile.roles.filter(id=runner_role.id).exists():
+                raise GraphQLError("You must be a runner to accept errands")
+
+        # Update errand with runner and status
+        old_status = errand.status
+        errand.runner = runner
+        errand.status = Errand.Status.IN_PROGRESS
+        errand.is_open = False  # Close the errand once accepted
+        errand.save(update_fields=['runner', 'status', 'is_open', 'updated_at'])
+        
+        # Handle escrow logic - create escrow if price exists
+        try:
+            handle_errand_status_change(
+                errand=errand,
+                old_status=old_status,
+                new_status=errand.status,
+                runner=runner
+            )
+        except Exception as e:
+            # Log error but don't fail the mutation
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to handle escrow logic on errand acceptance: {e}")
+        
+        # Send notification to buyer
+        try:
+            from apps.users.notifications import send_notification_to_user
+            send_notification_to_user(
+                user=errand.user,
+                title='Errand Accepted',
+                body=f'Your errand has been accepted by {runner.email}',
+                data={
+                    'type': 'errand_accepted',
+                    'errandId': str(errand.id),
+                }
+            )
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send notification: {e}")
+        
+        return AcceptErrand(errand=errand)
+
+
 class DeleteErrand(graphene.Mutation):
     class Arguments:
         id = graphene.ID(required=True)
@@ -457,6 +598,8 @@ class Query(graphene.ObjectType):
 
     me = graphene.Field(UserType)
     errands = graphene.List(ErrandType)
+    my_escrows = graphene.List(EscrowType)
+    escrow = graphene.Field(EscrowType, errand_id=graphene.ID(required=True))
 
     @login_required
     def resolve_me(self, info):
@@ -464,6 +607,25 @@ class Query(graphene.ObjectType):
 
     def resolve_errands(self, info):
         return Errand.objects.all().order_by("-created_at")
+    
+    @login_required
+    def resolve_my_escrows(self, info):
+        user = info.context.user
+        return Escrow.objects.filter(
+            django_models.Q(buyer=user) | django_models.Q(runner=user)
+        ).order_by("-created_at")
+    
+    @login_required
+    def resolve_escrow(self, info, errand_id):
+        user = info.context.user
+        try:
+            errand = Errand.objects.get(pk=errand_id)
+            # Only allow buyer or runner to view escrow
+            if errand.user != user and errand.runner != user:
+                raise GraphQLError("Not permitted")
+            return errand.escrow
+        except Escrow.DoesNotExist:
+            return None
 
 # =====================
 # ROOT SCHEMA
@@ -489,6 +651,7 @@ class Mutation(graphene.ObjectType):
     create_errand = CreateErrand.Field()
     save_errand_draft = SaveErrandDraft.Field()
     update_errand = UpdateErrand.Field()
+    accept_errand = AcceptErrand.Field()
     delete_errand = DeleteErrand.Field()
 
 
