@@ -27,3 +27,22 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"Profile({self.user.email})"
+
+
+class FCMToken(models.Model):
+    """Stores Firebase Cloud Messaging tokens for push notifications"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_tokens')
+    token = models.CharField(max_length=255, unique=True)
+    device_id = models.CharField(max_length=255, blank=True, null=True, help_text="Optional device identifier")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = [['user', 'token']]
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"FCMToken({self.user.email[:20]}...)"

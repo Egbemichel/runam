@@ -11,7 +11,7 @@ from apps.errands.models import Errand
 from apps.errands.services import store_errand_image
 from apps.locations.models import UserLocation
 from apps.roles.models import Role
-from apps.users.models import UserProfile
+from apps.users.models import UserProfile, FCMToken
 from apps.users.services import (
     verify_google_id_token,
     get_or_create_google_user,
@@ -271,6 +271,54 @@ class BecomeRunner(graphene.Mutation):
         profile.roles.add(runner_role)
         return BecomeRunner(ok=True)
 
+
+class RegisterFCMToken(graphene.Mutation):
+    """Register or update a Firebase Cloud Messaging token for push notifications"""
+    class Arguments:
+        token = graphene.String(required=True)
+        device_id = graphene.String(required=False)
+
+    ok = graphene.Boolean()
+    message = graphene.String()
+
+    @login_required
+    def mutate(self, info, token, device_id=None):
+        user = info.context.user
+        
+        # Update or create FCM token
+        fcm_token, created = FCMToken.objects.update_or_create(
+            token=token,
+            defaults={
+                'user': user,
+                'device_id': device_id,
+                'is_active': True,
+            }
+        )
+        
+        message = "FCM token registered successfully" if created else "FCM token updated successfully"
+        return RegisterFCMToken(ok=True, message=message)
+
+
+class UnregisterFCMToken(graphene.Mutation):
+    """Unregister a Firebase Cloud Messaging token"""
+    class Arguments:
+        token = graphene.String(required=True)
+
+    ok = graphene.Boolean()
+    message = graphene.String()
+
+    @login_required
+    def mutate(self, info, token):
+        user = info.context.user
+        
+        # Deactivate token (don't delete, in case we need to track it)
+        updated = FCMToken.objects.filter(user=user, token=token).update(is_active=False)
+        
+        if updated:
+            return UnregisterFCMToken(ok=True, message="FCM token unregistered successfully")
+        else:
+            return UnregisterFCMToken(ok=False, message="FCM token not found")
+
 # =====================
 # ERRAND MUTATIONS
 # =====================
@@ -339,11 +387,48 @@ class UpdateErrand(graphene.Mutation):
         if errand.user != info.context.user:
             raise GraphQLError("Not permitted")
 
+        old_status = errand.status
         for field, value in updates.items():
             if value is not None:
                 setattr(errand, field, value)
 
         errand.save()
+        
+        # Send notification if status changed
+        if 'status' in updates and updates['status'] != old_status:
+            try:
+                from apps.users.notifications import send_notification_to_user
+                
+                status_messages = {
+                    'IN_PROGRESS': {
+                        'title': 'Errand Accepted',
+                        'body': 'Your errand has been accepted and is now in progress',
+                    },
+                    'COMPLETED': {
+                        'title': 'Errand Completed',
+                        'body': 'Your errand has been completed successfully',
+                    },
+                    'CANCELLED': {
+                        'title': 'Errand Cancelled',
+                        'body': 'Your errand has been cancelled',
+                    },
+                }
+                
+                if errand.status in status_messages:
+                    msg = status_messages[errand.status]
+                    send_notification_to_user(
+                        user=errand.user,
+                        title=msg['title'],
+                        body=msg['body'],
+                        data={
+                            'type': f'errand_{errand.status.lower()}',
+                            'errandId': str(errand.id),
+                        }
+                    )
+            except Exception as e:
+                # Don't fail the mutation if notification fails
+                print(f"Failed to send notification: {e}")
+        
         return UpdateErrand(errand=errand)
 
 
@@ -397,6 +482,8 @@ class Mutation(graphene.ObjectType):
     # User
     update_user_location = UpdateUserLocation.Field()
     become_runner = BecomeRunner.Field()
+    register_fcm_token = RegisterFCMToken.Field()
+    unregister_fcm_token = UnregisterFCMToken.Field()
 
     # Errands
     create_errand = CreateErrand.Field()
