@@ -76,6 +76,9 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 
+    # Rate limiting (after auth middleware to access user)
+    'core.middleware.RateLimitMiddleware',
+
     # Required by django-allauth
     'allauth.account.middleware.AccountMiddleware',
 ]
@@ -136,6 +139,7 @@ GRAPHENE = {
     'SCHEMA': 'core.schema.schema',
     'MIDDLEWARE': [
         'graphql_jwt.middleware.JSONWebTokenMiddleware',
+        'core.graphql_middleware.RateLimitGraphQLMiddleware',
     ],
 }
 
@@ -202,3 +206,69 @@ FLUTTERWAVE_CURRENCY = os.getenv('FLUTTERWAVE_CURRENCY', 'NGN')
 FLUTTERWAVE_TEST_MODE = os.getenv('FLUTTERWAVE_TEST_MODE', 'True').lower() == 'true'
 FLUTTERWAVE_LOGO_URL = os.getenv('FLUTTERWAVE_LOGO_URL', '')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+
+# -------------------------------------------------------------------
+# Rate Limiting
+# -------------------------------------------------------------------
+RATE_LIMIT_ENABLED = os.getenv('RATE_LIMIT_ENABLED', 'True').lower() == 'true'
+RATE_LIMIT_CACHE_PREFIX = os.getenv('RATE_LIMIT_CACHE_PREFIX', 'ratelimit')
+RATE_LIMIT_DEFAULT = os.getenv('RATE_LIMIT_DEFAULT', '100/h')  # Default: 100 requests per hour
+
+# Rate limit rules for specific paths/operations
+# Format: 'path_pattern': 'max_requests/period'
+# Periods: s (second), m (minute), h (hour), d (day)
+RATE_LIMIT_RULES = {
+    '/graphql/': '200/h',  # GraphQL endpoint: 200 requests per hour
+    '/webhooks/flutterwave/': '1000/d',  # Webhooks: 1000 per day
+    '/admin/': '1000/h',  # Admin: 1000 per hour
+}
+
+# GraphQL-specific rate limits
+RATE_LIMIT_GRAPHQL_QUERY = os.getenv('RATE_LIMIT_GRAPHQL_QUERY', '300/h')  # Default: 300 queries per hour
+RATE_LIMIT_GRAPHQL_MUTATION = os.getenv('RATE_LIMIT_GRAPHQL_MUTATION', '50/h')  # Default: 50 mutations per hour
+
+# Operation-specific rate limits
+# Format: 'operation_name': 'max_requests/period'
+RATE_LIMIT_GRAPHQL_OPERATIONS = {
+    # Authentication operations - more lenient
+    'tokenAuth': '20/m',  # 20 login attempts per minute
+    'verifyGoogleToken': '20/m',
+    'refreshToken': '100/h',
+    
+    # Payment operations - stricter
+    'initializePayment': '10/h',  # 10 payment initializations per hour
+    'verifyPayment': '30/h',
+    'transferToRunner': '5/h',  # 5 transfers per hour
+    
+    # Errand operations
+    'createErrand': '20/h',  # 20 errands per hour
+    'acceptErrand': '30/h',  # 30 acceptances per hour
+    'updateErrand': '100/h',
+    
+    # Bank account operations
+    'updateBankAccount': '5/h',  # 5 updates per hour
+    
+    # FCM token operations
+    'registerFCMToken': '10/h',
+    'unregisterFCMToken': '20/h',
+}
+
+# Cache configuration for rate limiting
+# Uses Django's default cache backend (can be Redis, Memcached, etc.)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'rate-limiting',
+        'OPTIONS': {
+            'MAX_ENTRIES': 10000,
+        }
+    }
+}
+
+# For production, use Redis for better performance:
+# CACHES = {
+#     'default': {
+#         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+#         'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+#     }
+# }
