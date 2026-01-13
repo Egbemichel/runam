@@ -872,14 +872,58 @@ class Query(graphene.ObjectType):
         return info.context.user
 
     def resolve_errands(self, info):
-        return Errand.objects.all().order_by("-created_at")
+        # Cache errand list for better performance
+        from core.cache_utils import cache_queryset
+        from django.conf import settings
+        
+        queryset = Errand.objects.all().order_by("-created_at")
+        timeout = settings.CACHE_TIMEOUTS.get('errand_list', 60)
+        
+        # Only cache if caching is enabled
+        if getattr(settings, 'CACHE_ENABLED', True):
+            try:
+                cached = cache_queryset(queryset, timeout=timeout, key_prefix='errand_list')
+                if cached:
+                    # Convert back to queryset-like object
+                    from django.db import models
+                    return [Errand.objects.get(pk=item['id']) if isinstance(item, dict) else item for item in cached]
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Cache error in resolve_errands: {e}")
+        
+        return queryset
     
     @login_required
     def resolve_my_escrows(self, info):
         user = info.context.user
-        return Escrow.objects.filter(
+        from core.cache_utils import get_cache_key, cache_queryset
+        from django.core.cache import cache
+        from django.conf import settings
+        
+        queryset = Escrow.objects.filter(
             django_models.Q(buyer=user) | django_models.Q(runner=user)
         ).order_by("-created_at")
+        
+        # Cache user's escrows
+        if getattr(settings, 'CACHE_ENABLED', True):
+            try:
+                cache_key = get_cache_key('user_escrows', user.id)
+                timeout = settings.CACHE_TIMEOUTS.get('user_escrows', 300)
+                cached = cache.get(cache_key)
+                
+                if cached is not None:
+                    return cached
+                
+                result = list(queryset)
+                cache.set(cache_key, result, timeout)
+                return result
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Cache error in resolve_my_escrows: {e}")
+        
+        return queryset
     
     @login_required
     def resolve_escrow(self, info, errand_id):
@@ -901,9 +945,38 @@ class Query(graphene.ObjectType):
         if not FLUTTERWAVE_AVAILABLE or not flutterwave_service:
             raise GraphQLError("Payment gateway not configured")
         
+        # Cache banks list (changes infrequently)
+        from core.cache_utils import get_cache_key
+        from django.core.cache import cache
+        from django.conf import settings
+        
+        cache_key = get_cache_key('banks_list', country)
+        timeout = settings.CACHE_TIMEOUTS.get('banks_list', 86400)  # 24 hours
+        
+        if getattr(settings, 'CACHE_ENABLED', True):
+            try:
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    return cached
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Cache error in resolve_banks: {e}")
+        
         try:
             banks_result = flutterwave_service.get_banks(country)
-            return banks_result.get('banks', [])
+            banks = banks_result.get('banks', [])
+            
+            # Cache the result
+            if getattr(settings, 'CACHE_ENABLED', True):
+                try:
+                    cache.set(cache_key, banks, timeout)
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Cache set error in resolve_banks: {e}")
+            
+            return banks
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)

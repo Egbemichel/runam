@@ -253,22 +253,67 @@ RATE_LIMIT_GRAPHQL_OPERATIONS = {
     'unregisterFCMToken': '20/h',
 }
 
-# Cache configuration for rate limiting
-# Uses Django's default cache backend (can be Redis, Memcached, etc.)
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'rate-limiting',
-        'OPTIONS': {
-            'MAX_ENTRIES': 10000,
+# -------------------------------------------------------------------
+# Caching Configuration
+# -------------------------------------------------------------------
+CACHE_ENABLED = os.getenv('CACHE_ENABLED', 'True').lower() == 'true'
+CACHE_DEFAULT_TIMEOUT = int(os.getenv('CACHE_DEFAULT_TIMEOUT', '300'))  # 5 minutes
+REDIS_URL = os.getenv('REDIS_URL', '')
+
+# Cache configuration
+# Supports Redis (production) or local memory (development)
+if CACHE_ENABLED and REDIS_URL:
+    # Use Redis for production
+    try:
+        CACHES = {
+            'default': {
+                'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+                'LOCATION': REDIS_URL,
+                'OPTIONS': {
+                    'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                    'SOCKET_CONNECT_TIMEOUT': 5,
+                    'SOCKET_TIMEOUT': 5,
+                    'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
+                    'IGNORE_EXCEPTIONS': True,  # Don't fail if Redis is down
+                },
+                'KEY_PREFIX': 'runam',
+                'VERSION': 1,
+                'TIMEOUT': CACHE_DEFAULT_TIMEOUT,
+            }
+        }
+    except ImportError:
+        # Fallback to local memory if django-redis not installed
+        logger.warning("Redis URL provided but django-redis not installed. Using local memory cache.")
+        CACHES = {
+            'default': {
+                'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+                'LOCATION': 'runam-cache',
+                'OPTIONS': {
+                    'MAX_ENTRIES': 10000,
+                },
+                'TIMEOUT': CACHE_DEFAULT_TIMEOUT,
+            }
+        }
+else:
+    # Use local memory cache for development
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'runam-cache',
+            'OPTIONS': {
+                'MAX_ENTRIES': 10000,
+            },
+            'TIMEOUT': CACHE_DEFAULT_TIMEOUT,
         }
     }
-}
 
-# For production, use Redis for better performance:
-# CACHES = {
-#     'default': {
-#         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-#         'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
-#     }
-# }
+# Cache timeouts (in seconds)
+CACHE_TIMEOUTS = {
+    'user_profile': int(os.getenv('CACHE_TIMEOUT_USER_PROFILE', '3600')),  # 1 hour
+    'user_errands': int(os.getenv('CACHE_TIMEOUT_USER_ERRANDS', '300')),  # 5 minutes
+    'user_escrows': int(os.getenv('CACHE_TIMEOUT_USER_ESCROWS', '300')),  # 5 minutes
+    'errand_list': int(os.getenv('CACHE_TIMEOUT_ERRAND_LIST', '60')),  # 1 minute
+    'errand_detail': int(os.getenv('CACHE_TIMEOUT_ERRAND_DETAIL', '300')),  # 5 minutes
+    'banks_list': int(os.getenv('CACHE_TIMEOUT_BANKS_LIST', '86400')),  # 24 hours
+    'roles': int(os.getenv('CACHE_TIMEOUT_ROLES', '3600')),  # 1 hour
+}
