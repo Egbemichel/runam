@@ -6,13 +6,12 @@ import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
-import '../app/router.dart';
+import '../app/app.dart';
 import '../app/theme.dart';
 import '../models/app_user.dart';
 import '../models/user_location.dart';
 import '../services/auth_service.dart';
 import '../services/graphql_client.dart';
-import 'location_controller.dart';
 import 'location_controller.dart';
 
 /// AuthController handles authentication using OAuth token exchange pattern:
@@ -36,6 +35,7 @@ class AuthController extends GetxController {
   final user = Rxn<AppUser>();
   final isAuthenticated = false.obs;
   final accessToken = RxnString();
+  final refreshToken = RxnString();
   final isLoading = false.obs;
   final errorMessage = RxnString();
 
@@ -57,6 +57,7 @@ class AuthController extends GetxController {
   void _restoreSession() {
     print('🔄 [Auth] Restoring session from local storage...');
     final storedToken = _storage.read<String>('accessToken');
+    final storedRefreshToken = _storage.read<String>('refreshToken');
     final storedUserJson = _storage.read<String>('user');
 
     if (storedToken == null || storedToken.isEmpty) {
@@ -65,6 +66,7 @@ class AuthController extends GetxController {
     }
 
     accessToken.value = storedToken;
+    refreshToken.value = storedRefreshToken;
     print('🔑 [Auth] Token restored');
 
     if (storedUserJson != null && storedUserJson.isNotEmpty) {
@@ -170,11 +172,13 @@ class AuthController extends GetxController {
       );
       print('✅ [Auth] Backend verification successful!');
       print('👤 [Auth] User: ${authResponse.user.name} (${authResponse.user.email})');
+      print('🔁 Refresh token length: ${authResponse.refreshToken.length}');
 
       // Step 4: Store Django-issued JWT and user data
       print('💾 [Auth] Step 4: Storing session...');
       _setSession(
         token: authResponse.accessToken,
+        refreshToken: authResponse.refreshToken ?? '',
         userData: authResponse.user,
       );
       print('✅ [Auth] Session stored successfully!');
@@ -201,13 +205,15 @@ class AuthController extends GetxController {
   }
 
   /// Sets the session state and persists to storage
-  void _setSession({required String token, required AppUser userData}) {
+  void _setSession({required String token, required String refreshToken, required AppUser userData}) {
     user.value = userData;
     accessToken.value = token;
+    this.refreshToken.value = refreshToken;
     isAuthenticated.value = true;
 
     // Persist to local storage
     _storage.write('accessToken', token);
+    _storage.write('refreshToken', refreshToken);
     _storage.write('user', jsonEncode(userData.toJson()));
 
     // Update GraphQL client with Django JWT for future API calls
@@ -222,6 +228,7 @@ class AuthController extends GetxController {
     errorMessage.value = null;
 
     _storage.remove('accessToken');
+    _storage.remove('refreshToken');
     _storage.remove('user');
 
     GraphQLClientInstance.init();
@@ -229,22 +236,45 @@ class AuthController extends GetxController {
 
   /// Syncs user location with the backend
   Future<void> syncLocation() async {
-    if (!isAuthenticated.value) return;
+    print('📍 [Auth] === SYNC LOCATION TO BACKEND ===');
+
+    if (!isAuthenticated.value) {
+      print('📍 [Auth] User not authenticated, skipping location sync');
+      return;
+    }
 
     try {
       final locationPayload = Get.find<LocationController>().toPayload();
-      if (locationPayload.isNotEmpty) {
-        await _authService.updateLocation(
-          mode: locationPayload['mode'],
-          latitude: locationPayload['lat'],
-          longitude: locationPayload['lng'],
-          address: locationPayload['label'],
-        );
+      print('📍 [Auth] Location payload: $locationPayload');
+
+      if (locationPayload.isEmpty) {
+        print('📍 [Auth] Location payload is empty, skipping sync');
+        return;
+      }
+
+      print('📍 [Auth] Sending location to backend...');
+      print('📍 [Auth] Mode: ${locationPayload['mode']}');
+      print('📍 [Auth] Latitude: ${locationPayload['latitude']}');
+      print('📍 [Auth] Longitude: ${locationPayload['longitude']}');
+      print('📍 [Auth] Address: ${locationPayload['address']}');
+
+      final success = await _authService.updateLocation(
+        mode: locationPayload['mode'],
+        latitude: (locationPayload['latitude'] as num).toDouble(),
+        longitude: (locationPayload['longitude'] as num).toDouble(),
+        address: locationPayload['address'],
+      );
+
+      if (success) {
+        print('✅ [Auth] Location synced successfully to backend!');
+      } else {
+        print('❌ [Auth] Location sync failed.');
       }
     } catch (e) {
-      // Silent fail for location sync
+      print('❌ [Auth] Failed to sync location: $e');
     }
   }
+
 
   /// Logs out the user
   Future<void> logout() async {
@@ -269,27 +299,32 @@ class AuthController extends GetxController {
 
   /// Shows a snackbar using Flutter's ScaffoldMessenger
   void _showSnackBar({required String message, required bool isError}) {
-    final context = rootNavigatorKey.currentContext;
-    if (context == null) {
-      print('⚠️ [Auth] Cannot show snackbar - no context available');
-      return;
-    }
+    try {
+      // Use the global scaffoldMessengerKey directly
+      final messenger = scaffoldMessengerKey.currentState;
+      if (messenger == null) {
+        print('⚠️ [Auth] Cannot show snackbar - scaffoldMessengerKey.currentState is null');
+        return;
+      }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(color: Colors.white),
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            message,
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: isError ? AppTheme.error : AppTheme.success,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          duration: Duration(seconds: isError ? 4 : 2),
         ),
-        backgroundColor: isError ? AppTheme.error : AppTheme.success,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
-        duration: Duration(seconds: isError ? 4 : 2),
-      ),
-    );
+      );
+    } catch (e) {
+      print('⚠️ [Auth] Failed to show snackbar: $e');
+    }
   }
 }
 

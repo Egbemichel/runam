@@ -1,7 +1,7 @@
 class Place {
   final String name;
-  final double lat;
-  final double lng;
+  final double latitude;
+  final double longitude;
   final String? street;
   final String? city;
   final String? region;
@@ -9,8 +9,8 @@ class Place {
 
   Place({
     required this.name,
-    required this.lat,
-    required this.lng,
+    required this.latitude,
+    required this.longitude,
     this.street,
     this.city,
     this.region,
@@ -31,20 +31,17 @@ class Place {
   }
 
   Map<String, dynamic> toPayload() => {
-    "name": name,
-    "latitude": lat,
-    "longitude": lng,
-    "street": street,
-    "city": city,
-    "region": region,
-    "country": country,
+    "latitude": latitude,
+    "longitude": longitude,
+    "address": formattedAddress,
   };
+
 
   factory Place.fromJson(Map<String, dynamic> json) {
     return Place(
       name: json["name"] ?? "",
-      lat: (json["latitude"] ?? 0).toDouble(),
-      lng: (json["longitude"] ?? 0).toDouble(),
+      latitude: (json["latitude"] ?? 0).toDouble(),
+      longitude: (json["longitude"] ?? 0).toDouble(),
       street: json["street"],
       city: json["city"],
       region: json["region"],

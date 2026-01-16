@@ -1,4 +1,5 @@
 import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:runam/services/token_refresher.dart';
 import '../models/app_user.dart';
 import 'graphql_client.dart';
 
@@ -21,6 +22,7 @@ class AuthService {
       mutation VerifyGoogleToken($idToken: String!) {
         verifyGoogleToken(idToken: $idToken) {
           access
+          refresh
           user {
             id
             name
@@ -34,9 +36,8 @@ class AuthService {
               id
               latitude
               longitude
-              label
-              type
-              isActive
+              address
+              mode
             }
           }
         }
@@ -95,6 +96,7 @@ class AuthService {
 
       return AuthResponse(
         accessToken: data['access'] as String,
+        refreshToken: data['refresh'] as String,
         user: AppUser.fromJson(data['user'] as Map<String, dynamic>),
       );
     } catch (e, stackTrace) {
@@ -157,50 +159,102 @@ class AuthService {
   }
 
   /// Updates user location on the server
-  Future<void> updateLocation({
+  Future<bool> updateLocation({
     required String mode,
     required double latitude,
     required double longitude,
     String? address,
   }) async {
+    print('🌐 [AuthService] === UPDATE LOCATION ===');
+    print('🌐 [AuthService] Mode: $mode');
+    print('🌐 [AuthService] Latitude: $latitude');
+    print('🌐 [AuthService] Longitude: $longitude');
+    print('🌐 [AuthService] Address: $address');
+
     const mutation = r'''
-      mutation UpdateUserLocation(
-        $mode: String!,
-        $latitude: Float!,
-        $longitude: Float!,
-        $address: String
-      ) {
-        updateUserLocation(
-          mode: $mode,
-          latitude: $latitude,
-          longitude: $longitude,
-          address: $address
-        ) {
-          location {
-            id
-            mode
-            latitude
-            longitude
-            address
-          }
-        }
+  mutation UpdateUserLocation(
+    $mode: String!,
+    $latitude: Float!,
+    $longitude: Float!,
+    $address: String
+  ) {
+    updateUserLocation(
+      mode: $mode,
+      latitude: $latitude,
+      longitude: $longitude,
+      address: $address
+    ) {
+      location {
+        id
+        mode
+        latitude
+        longitude
+        address
       }
-    ''';
+    }
+  }
+  ''';
 
     final client = GraphQLClientInstance.client;
 
-    await client.mutate(
-      MutationOptions(
-        document: gql(mutation),
-        variables: {
-          'mode': mode,
-          'latitude': latitude,
-          'longitude': longitude,
-          'address': address,
-        },
-      ),
-    );
+    final variables = {
+      'mode': mode,
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+    if (address != null && address.isNotEmpty) {
+      variables['address'] = address;
+    }
+
+    try {
+      final stopwatch = Stopwatch()..start();
+
+      // First attempt
+      var result = await client.mutate(
+        MutationOptions(document: gql(mutation), variables: variables),
+      );
+
+      stopwatch.stop();
+      print('📥 [AuthService] Response received in ${stopwatch.elapsedMilliseconds}ms');
+
+      // Refresh token if expired
+      if (result.hasException &&
+          result.exception!.graphqlErrors.any((e) => e.message.contains('Signature has expired'))) {
+        print('🔁 [AuthService] Token expired, attempting refresh...');
+        final newToken = await TokenRefresher.refresh();
+
+        if (newToken != null) {
+          print('✅ [AuthService] Token refreshed, retrying mutation...');
+          result = await client.mutate(
+            MutationOptions(document: gql(mutation), variables: variables),
+          );
+        } else {
+          print('❌ [AuthService] Token refresh failed.');
+          return false;
+        }
+      }
+
+      // Check for errors
+      if (result.hasException) {
+        print('❌ [AuthService] GraphQL Exception: ${result.exception}');
+        return false;
+      }
+
+      final locationData = result.data?['updateUserLocation']?['location'];
+      if (locationData != null) {
+        print('✅ [AuthService] Location updated successfully!');
+        print('📍 [AuthService] Server response: $locationData');
+        return true;
+      } else {
+        print('⚠️ [AuthService] Location update returned no data.');
+        return false;
+      }
+    } catch (e) {
+      print('❌ [AuthService] Failed to update location due to unexpected error: $e');
+      return false;
+    }
   }
+
 
   /// Logs out the user (optional server-side cleanup)
   Future<void> logout() async {
@@ -222,11 +276,14 @@ class AuthException implements Exception {
 /// Contains the Django-issued JWT and user data
 class AuthResponse {
   final String accessToken;
+  final String refreshToken;
   final AppUser user;
 
   AuthResponse({
     required this.accessToken,
+    required this.refreshToken,
     required this.user,
   });
 }
+
 

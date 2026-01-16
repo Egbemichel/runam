@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
+from django.apps import apps
 
 User = get_user_model()
 
@@ -18,9 +19,21 @@ class Errand(models.Model):
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     type = models.CharField(max_length=20, choices=Type.choices)
-    instructions = models.TextField()
     speed = models.CharField(max_length=10)
     payment_method = models.CharField(max_length=20)
+    go_to = models.ForeignKey(
+        'errand_location.ErrandLocation',
+        null=True,
+        on_delete=models.CASCADE,
+        related_name='errands_go_to'
+    )
+    return_to = models.ForeignKey(
+        'errand_location.ErrandLocation',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='errands_return_to'
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
     # Optional image
@@ -40,3 +53,34 @@ class Errand(models.Model):
                 self.is_open = False
                 self.status = self.Status.EXPIRED
                 self.save(update_fields=["is_open", "status", "updated_at"])
+
+    def errand_value(self):
+        return sum(task.price for task in self.tasks.all())
+
+    def service_fee(self):
+        return int(self.errand_value() * 0.2)
+
+    def distance_fee(self):
+        # placeholder – integrate maps later
+        return 0
+
+    def total_price(self):
+        return self.errand_value() + self.service_fee() + self.distance_fee()
+
+def get_errand_location_model():
+    return apps.get_model('errand_location', 'ErrandLocation')
+
+class ErrandTask(models.Model):
+    errand = models.ForeignKey(
+        Errand,
+        related_name="tasks",
+        on_delete=models.CASCADE
+    )
+    description = models.CharField(max_length=255)
+    price = models.PositiveIntegerField(help_text="Price in XAF")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.description} - XAF {self.price}"
+

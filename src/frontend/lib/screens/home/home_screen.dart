@@ -6,12 +6,12 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:geolocator/geolocator.dart' as geo;
-
 import '../../app/theme.dart';
 import '../../components/errand_card.dart';
 import '../../controllers/auth_controller.dart';
 import '../../features/errand/screens/add_errand.dart';
 import '../profile/profile_screen.dart';
+import '../../features/errand/controllers/errand_controllers.dart';
 
 class HomeScreen extends StatefulWidget {
   static const String routeName = "home";
@@ -25,6 +25,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final AuthController authController;
+  late final ErrandController errandController;
   final DraggableScrollableController _sheetController =
   DraggableScrollableController();
 
@@ -38,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     authController = Get.find<AuthController>();
+    errandController = Get.find<ErrandController>();
     _startTrackingLocation();
   }
 
@@ -127,16 +129,16 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: AppTheme.neutral100,
       body: Stack(
         children: [
-          mapbox.MapWidget(
-            cameraOptions: _cameraOptions,
-            onMapCreated: _onMapCreated,
-            onCameraChangeListener: (camera) {
-              if (_isFollowingUser) {
-                _isFollowingUser = false;
-                setState(() {});
-              }
-            },
-          ),
+          // mapbox.MapWidget(
+          //   cameraOptions: _cameraOptions,
+          //   onMapCreated: _onMapCreated,
+          //   onCameraChangeListener: (camera) {
+          //     if (_isFollowingUser) {
+          //       _isFollowingUser = false;
+          //       setState(() {});
+          //     }
+          //   },
+          // ),
 
           if (!_isFollowingUser)
             Positioned(
@@ -196,7 +198,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           /// DRAGGABLE SHEET
           DraggableScrollableSheet(
-            initialChildSize: 0.55,
+            initialChildSize: 0.3,
             minChildSize: 0.3,
             maxChildSize: 0.9,
             snap: true,
@@ -206,72 +208,91 @@ class _HomeScreenState extends State<HomeScreen> {
               return Container(
                 decoration: const BoxDecoration(
                   color: AppTheme.secondary500,
-                  borderRadius:
-                  BorderRadius.vertical(top: Radius.circular(40)),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(40)),
                 ),
-                child: ListView(
+                child: SingleChildScrollView(
                   controller: scrollController,
                   padding: const EdgeInsets.all(24),
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: AppTheme.primary700
-                              .withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    /// TITLE
-                    Obx(() => Text(
-                      authController.isAuthenticated.value
-                          ? 'Recent errands'
-                          : 'Sample errand',
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodyLarge
-                          ?.copyWith(
-                          color: AppTheme.primary700),
-                    )),
-
-                    const SizedBox(height: 15),
-
-                    /// CONTENT
-                    Obx(() {
-                      return authController.isAuthenticated.value
-                          ? _buildEmptyState()
-                          : const ErrandCard();
-                    }),
-
-                    const SizedBox(height: 40),
-
-                    /// FOOTER LOGIN PROMPT
-                    Obx(() {
-                      if (authController.isAuthenticated.value) {
-                        return const SizedBox.shrink();
-                      }
-                      return Center(
-                        child: GestureDetector(
-                          onTap: () => authController.login(),
-                          child: const Text(
-                            'Already have an account? Log in',
-                            style: TextStyle(
-                              color: AppTheme.primary700,
-                              fontWeight: FontWeight.bold,
-                            ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, // Important: shrink-wrap content
+                    children: [
+                      // Top drag indicator
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary700.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(10),
                           ),
                         ),
-                      );
-                    }),
-                  ],
+                      ),
+                      const SizedBox(height: 20),
+
+                      // TITLE
+                      Obx(() => Text(
+                        authController.isAuthenticated.value
+                            ? 'Recent errands'
+                            : 'Sample errand',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyLarge
+                            ?.copyWith(color: AppTheme.primary700),
+                      )),
+                      const SizedBox(height: 15),
+
+                      // CONTENT
+                      Obx(() {
+                        if (errandController.isLoading.value) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        final errands = errandController.errands;
+
+                        if (errands.isEmpty) {
+                          return _buildEmptyState(); // Authenticated but no errands
+                        }
+
+                        // Display errands as a Column with shrink-wrap
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: List.generate(errands.length, (index) {
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: ErrandCard(errand: errands[index]),
+                            );
+                          }),
+                        );
+                      }),
+
+                      const SizedBox(height: 40),
+
+                      // FOOTER LOGIN PROMPT
+                      Obx(() {
+                        if (authController.isAuthenticated.value) {
+                          return const SizedBox.shrink();
+                        }
+                        return Center(
+                          child: GestureDetector(
+                            onTap: () => authController.login(),
+                            child: const Text(
+                              'Already have an account? Log in',
+                              style: TextStyle(
+                                color: AppTheme.primary700,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
                 ),
               );
             },
           ),
+
 
           _buildMovingFloatingCTA(),
 

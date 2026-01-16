@@ -366,7 +366,14 @@ class _ErrandDetailsSheet extends StatelessWidget {
                     _buildSection(
                       'Instructions',
                       IconsaxPlusLinear.document_text,
-                      errand.instructions,
+                      // Convert tasks list into a single displayable string
+                      errand.tasks.isNotEmpty
+                          ? errand.tasks
+                              .map((t) => t.price > 0
+                                  ? '${t.description.trim()} — ₦${t.price}'
+                                  : t.description.trim())
+                              .join('\n')
+                          : 'No Tasks provided',
                     ),
 
                     const SizedBox(height: 24),

@@ -34,8 +34,8 @@ def get_or_create_google_user(payload: dict) -> User:
 
     # Create or get built-in User
     user, created = User.objects.get_or_create(
-        email=email,
-        defaults={},
+        username=email,
+        defaults={'email': email},
     )
 
     # Best-effort: split name into first/last
