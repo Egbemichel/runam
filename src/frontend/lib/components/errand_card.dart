@@ -15,7 +15,7 @@ class ErrandCard extends StatelessWidget {
     final dateTime = errand?.createdAtFormatted ?? '---';
     final runnerName = errand?.runnerName ?? 'runnerName';
     final runnerScore = "${errand?.runnerScore?.toString()}";
-    final timeTaken = "${errand?.speed } mins";
+    final timeTaken = "${errand?.speed }";
     final amount = "XAF ${errand?.price ?? 0}";
     final paymentMethod = errand?.paymentMethod ?? 'CASH';
 

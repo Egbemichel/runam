@@ -149,7 +149,7 @@ class MyErrandsController extends GetxController {
   }
 
   /// Refresh errands from server
-  Future<void> refresh() async {
+  Future<void> refreshErrands() async {
     await fetchErrands();
   }
 }

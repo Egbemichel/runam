@@ -41,6 +41,8 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
   late final ErrandController errandController;
   late final ErrandDraftController draftController;
 
+  final List<String> _speedOptions = ['10mins', '15mins', '30mins'];
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +56,23 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
 
     goToController.addListener(_onTextChanged);
     returnToController.addListener(_onTextChanged);
+  }
+
+  String? _normalizeSpeed(String? raw) {
+    if (raw == null) return null;
+    // Remove whitespace and unify to pattern like "10mins"
+    var s = raw.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    if (RegExp(r'^\d+$').hasMatch(s)) {
+      s = '${s}mins';
+    } else if (s.endsWith('min') && !s.endsWith('mins')) {
+      s = '${s}s';
+    }
+    return s;
+  }
+
+  String _formatSpeedLabel(String value) {
+    // value is like "10mins" -> show "10 mins"
+    return value.replaceAll('mins', ' mins');
   }
 
   void _loadSavedDraft() {
@@ -392,8 +411,13 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
   Widget _buildSpeedDropdown() {
     return DropdownButtonFormField<String>(
       value: selectedSpeed,
-      items: ["10", "15", "30"].map((s) => DropdownMenuItem(value: s, child: Text("$s mins"))).toList(),
-      onChanged: (v) { setState(() => selectedSpeed = v); errandController.setSpeed(v!); _saveDraft(); },
+      items: _speedOptions.map((s) => DropdownMenuItem(value: s, child: Text(_formatSpeedLabel(s)))).toList(),
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() => selectedSpeed = v);
+        errandController.setSpeed(v);
+        _saveDraft();
+      },
       decoration: _inputDecoration("Speed"),
     );
   }

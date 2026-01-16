@@ -36,7 +36,7 @@ class MyErrandsScreen extends StatelessWidget {
         centerTitle: true,
         actions: [
           IconButton(
-            onPressed: () => controller.refresh(),
+            onPressed: () => controller.refreshErrands(),
             icon: const Icon(
               IconsaxPlusLinear.refresh,
               color: AppTheme.primary700,
@@ -90,7 +90,7 @@ class MyErrandsScreen extends StatelessWidget {
               }
 
               return RefreshIndicator(
-                onRefresh: () => controller.refresh(),
+                onRefresh: () => controller.refreshErrands(),
                 color: AppTheme.primary500,
                 child: ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

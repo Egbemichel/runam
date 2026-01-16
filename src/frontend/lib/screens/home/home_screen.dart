@@ -57,7 +57,9 @@ class _HomeScreenState extends State<HomeScreen> {
     geo.LocationPermission permission =
     await geo.Geolocator.requestPermission();
     if (permission == geo.LocationPermission.denied ||
-        permission == geo.LocationPermission.deniedForever) return;
+        permission == geo.LocationPermission.deniedForever) {
+      return;
+    }
 
     final geo.Position initialPos =
     await geo.Geolocator.getCurrentPosition();
@@ -129,16 +131,16 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: AppTheme.neutral100,
       body: Stack(
         children: [
-          // mapbox.MapWidget(
-          //   cameraOptions: _cameraOptions,
-          //   onMapCreated: _onMapCreated,
-          //   onCameraChangeListener: (camera) {
-          //     if (_isFollowingUser) {
-          //       _isFollowingUser = false;
-          //       setState(() {});
-          //     }
-          //   },
-          // ),
+          mapbox.MapWidget(
+            cameraOptions: _cameraOptions,
+            onMapCreated: _onMapCreated,
+            onCameraChangeListener: (camera) {
+              if (_isFollowingUser) {
+                _isFollowingUser = false;
+                setState(() {});
+              }
+            },
+          ),
 
           if (!_isFollowingUser)
             Positioned(
