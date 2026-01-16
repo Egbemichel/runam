@@ -17,6 +17,7 @@ Future<void> main() async {
   await GetStorage.init();
   await GraphQLClientInstance.init(); // For unauthenticated requests
 
+
   // Initialize controllers as singletons
   Get.put(AuthController(), permanent: true);
   Get.put(LocationController(), permanent: true);

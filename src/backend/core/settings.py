@@ -4,6 +4,7 @@ Configured for GraphQL (Graphene + graphql-jwt), not REST.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -138,9 +139,11 @@ GRAPHENE = {
 }
 
 GRAPHQL_JWT = {
+    'JWT_AUTH_HEADER_PREFIX': 'JWT',
     'JWT_VERIFY_EXPIRATION': True,
     'JWT_LONG_RUNNING_REFRESH_TOKEN': True,
     'JWT_ALLOW_ARGUMENT': True,
+    'JWT_REFRESH_EXPIRATION_DELTA': timedelta(days=7),
 }
 
 # -------------------------------------------------------------------
@@ -184,7 +187,12 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Storage mode: 'local' or 'supabase'
-STORAGE_MODE = os.getenv('STORAGE_MODE', 'local' if DEBUG else 'supabase')
+STORAGE_MODE = os.getenv('STORAGE_MODE', 'dev' if DEBUG else 'prod')
 SUPABASE_URL = os.getenv('SUPABASE_URL', '')
 SUPABASE_BUCKET = os.getenv('SUPABASE_BUCKET', 'public')
 SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
+
+# -------------------------------------------------------------------
+# Errand configuration
+# -------------------------------------------------------------------
+ERRAND_TTL_MINUTES = int(os.getenv('ERRAND_TTL_MINUTES', '30'))

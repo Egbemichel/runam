@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import '../../../models/place_models.dart';
+import '../models/errand_draft.dart';
 
 /// Enum for errand status categories
 enum ErrandStatus {
@@ -40,7 +43,8 @@ extension ErrandStatusExtension on ErrandStatus {
     }
   }
 
-  static ErrandStatus fromString(String status) {
+  static ErrandStatus fromString(String? status) {
+    if (status == null) return ErrandStatus.pending;
     switch (status.toUpperCase()) {
       case 'PENDING':
         return ErrandStatus.pending;
@@ -78,7 +82,7 @@ extension ErrandStatusExtension on ErrandStatus {
 class Errand {
   final String id;
   final String type;
-  final String instructions;
+  final List<ErrandTaskDraft> tasks;
   final String speed;
   final String paymentMethod;
   final Place goTo;
@@ -95,7 +99,7 @@ class Errand {
   Errand({
     required this.id,
     required this.type,
-    required this.instructions,
+    required this.tasks,
     required this.speed,
     required this.paymentMethod,
     required this.goTo,
@@ -119,6 +123,28 @@ class Errand {
     return remaining.isNegative ? Duration.zero : remaining;
   }
 
+
+  /// Runner score (optional, default 0)
+  double get runnerScore => 0.0; // replace with real data if available
+
+  /// Time taken to complete the errand (optional, default 0)
+  int get timeTaken {
+    if (status == ErrandStatus.completed) {
+      return expiresAt.difference(createdAt).inMinutes;
+    }
+    return 0;
+  }
+
+  /// Formatted createdAt string
+  String get createdAtFormatted {
+    return '${createdAt.day.toString().padLeft(2, '0')}/'
+        '${createdAt.month.toString().padLeft(2, '0')}/'
+        '${createdAt.year} '
+        '${createdAt.hour.toString().padLeft(2, '0')}:'
+        '${createdAt.minute.toString().padLeft(2, '0')}';
+  }
+
+
   /// Formatted time remaining string
   String get timeRemainingFormatted {
     final remaining = timeRemaining;
@@ -141,43 +167,82 @@ class Errand {
   }
 
   factory Errand.fromJson(Map<String, dynamic> json) {
+    // helper to safely get a string value
+    String safeString(dynamic v) => v == null ? '' : v.toString();
+
+    // parse tasks
+    final tasksList = (json['tasks'] as List<dynamic>?) ?? (json['task_list'] as List<dynamic>?) ?? [];
+
     return Errand(
-      id: json['id'] as String,
-      type: json['type'] as String,
-      instructions: json['instructions'] as String,
-      speed: json['speed'] as String,
-      paymentMethod: json['paymentMethod'] ?? json['payment_method'] as String,
+      id: safeString(json['id']),
+      type: safeString(json['type']),
+      tasks: tasksList.map((t) => ErrandTaskDraft.fromJson(t as Map<String, dynamic>)).toList(),
+      speed: safeString(json['speed']),
+      paymentMethod: safeString(json['paymentMethod'] ?? json['payment_method']),
       goTo: _parsePlaceFromJson(json['goTo'] ?? json['go_to']),
-      returnTo: json['returnTo'] != null || json['return_to'] != null
+      returnTo: (json['returnTo'] ?? json['return_to']) != null
           ? _parsePlaceFromJson(json['returnTo'] ?? json['return_to'])
           : null,
       imageUrl: json['imageUrl'] ?? json['image_url'],
-      status: ErrandStatusExtension.fromString(json['status'] as String),
+      status: ErrandStatusExtension.fromString(safeString(json['status'])),
       isOpen: json['isOpen'] ?? json['is_open'] ?? false,
-      createdAt: DateTime.parse(json['createdAt'] ?? json['created_at']),
-      expiresAt: DateTime.parse(json['expiresAt'] ?? json['expires_at']),
-      runnerId: json['runnerId'] ?? json['runner_id'],
-      runnerName: json['runnerName'] ?? json['runner_name'],
+      createdAt: DateTime.tryParse(safeString(json['createdAt'] ?? json['created_at'])) ?? DateTime.now(),
+      expiresAt: DateTime.tryParse(safeString(json['expiresAt'] ?? json['expires_at'])) ?? DateTime.now(),
+      runnerId: json['runnerId'] ?? json['runner_id'] != null ? safeString(json['runnerId'] ?? json['runner_id']) : null,
+      runnerName: json['runnerName'] ?? json['runner_name'] != null ? safeString(json['runnerName'] ?? json['runner_name']) : null,
       price: json['price'] != null ? (json['price'] as num).toDouble() : null,
     );
   }
 
-  static Place _parsePlaceFromJson(Map<String, dynamic> json) {
+  static Place _parsePlaceFromJson(dynamic json) {
+    // Handle nulls and stringified JSON
+    if (json == null) {
+      return Place(name: '', latitude: 0.0, longitude: 0.0);
+    }
+
+    Map<String, dynamic> map;
+    if (json is String) {
+      try {
+        map = jsonDecode(json) as Map<String, dynamic>;
+      } catch (_) {
+        // Treat the string as the name/address
+        return Place(name: json, latitude: 0.0, longitude: 0.0);
+      }
+    } else if (json is Map<String, dynamic>) {
+      map = json;
+    } else {
+      // Unknown shape - return empty Place
+      return Place(name: '', latitude: 0.0, longitude: 0.0);
+    }
+
+    // Backend may return a `formattedAddress` or `address` field instead of `name`.
+    final name = map['name'] ?? map['formattedAddress'] ?? map['address'] ?? '';
+
+    // Robust parsing for latitude/longitude coming as num or String
+    double parseDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0.0;
+    }
+
+    final latitude = parseDouble(map['lat'] ?? map['latitude']);
+    final longitude = parseDouble(map['lng'] ?? map['longitude']);
+
     return Place(
-      name: json['name'] ?? '',
-      lat: (json['lat'] ?? json['latitude'] ?? 0).toDouble(),
-      lng: (json['lng'] ?? json['longitude'] ?? 0).toDouble(),
-      street: json['street'],
-      city: json['city'],
-      region: json['region'],
-      country: json['country'],
+      name: name,
+      latitude: latitude,
+      longitude: longitude,
+      street: map['street'],
+      city: map['city'],
+      region: map['region'],
+      country: map['country'],
     );
   }
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'type': type,
-    'instructions': instructions,
+    'tasks': tasks.map((t) => t.toJson()).toList(),
     'speed': speed,
     'payment_method': paymentMethod,
     'go_to': goTo.toPayload(),
@@ -195,7 +260,7 @@ class Errand {
   Errand copyWith({
     String? id,
     String? type,
-    String? instructions,
+    List<ErrandTaskDraft>? tasks,
     String? speed,
     String? paymentMethod,
     Place? goTo,
@@ -212,7 +277,7 @@ class Errand {
     return Errand(
       id: id ?? this.id,
       type: type ?? this.type,
-      instructions: instructions ?? this.instructions,
+      tasks: tasks ?? this.tasks,
       speed: speed ?? this.speed,
       paymentMethod: paymentMethod ?? this.paymentMethod,
       goTo: goTo ?? this.goTo,
@@ -228,4 +293,3 @@ class Errand {
     );
   }
 }
-

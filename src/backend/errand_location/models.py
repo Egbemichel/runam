@@ -1,13 +1,19 @@
 from django.db import models
 from apps.errands.models import Errand
+from apps.locations.models import LocationMode
 
 class ErrandLocation(models.Model):
-    errand = models.ForeignKey(Errand, related_name="locations", on_delete=models.CASCADE)
-    kind = models.CharField(
-        max_length=10,
-        choices=[("GO_TO", "Go To"), ("RETURN_TO", "Return To")]
+    errand = models.ForeignKey(
+        "errands.Errand",
+        on_delete=models.CASCADE,
+        related_name="locations"
     )
     latitude = models.FloatField()
     longitude = models.FloatField()
-    address = models.TextField()
+    address = models.TextField(blank=True)
+    mode = models.CharField(
+        max_length=10,
+        choices=LocationMode.choices,
+    )
+
 

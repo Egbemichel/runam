@@ -54,6 +54,15 @@ class _ErrandItemCardState extends State<ErrandItemCard> {
     });
   }
 
+  // Return a short preview string for the tasks/instructions
+  String _tasksPreview() {
+    final tasks = widget.errand.tasks;
+    if (tasks.isEmpty) return 'No instructions provided';
+    return tasks
+        .map((t) => t.price > 0 ? '${t.description.trim()} — ₦${t.price}' : t.description.trim())
+        .join('\n');
+  }
+
   Color _getStatusColor() {
     switch (widget.errand.status) {
       case ErrandStatus.pending:
@@ -332,7 +341,7 @@ class _ErrandItemCardState extends State<ErrandItemCard> {
                   const SizedBox(height: 12),
                   // Instructions preview
                   Text(
-                    widget.errand.instructions,
+                    _tasksPreview(),
                     style: const TextStyle(
                       fontSize: 13,
                       color: AppTheme.neutral200,

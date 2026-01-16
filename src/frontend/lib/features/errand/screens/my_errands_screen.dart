@@ -36,7 +36,7 @@ class MyErrandsScreen extends StatelessWidget {
         centerTitle: true,
         actions: [
           IconButton(
-            onPressed: () => controller.refresh(),
+            onPressed: () => controller.refreshErrands(),
             icon: const Icon(
               IconsaxPlusLinear.refresh,
               color: AppTheme.primary700,
@@ -90,7 +90,7 @@ class MyErrandsScreen extends StatelessWidget {
               }
 
               return RefreshIndicator(
-                onRefresh: () => controller.refresh(),
+                onRefresh: () => controller.refreshErrands(),
                 color: AppTheme.primary500,
                 child: ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -366,7 +366,14 @@ class _ErrandDetailsSheet extends StatelessWidget {
                     _buildSection(
                       'Instructions',
                       IconsaxPlusLinear.document_text,
-                      errand.instructions,
+                      // Convert tasks list into a single displayable string
+                      errand.tasks.isNotEmpty
+                          ? errand.tasks
+                              .map((t) => t.price > 0
+                                  ? '${t.description.trim()} — ₦${t.price}'
+                                  : t.description.trim())
+                              .join('\n')
+                          : 'No Tasks provided',
                     ),
 
                     const SizedBox(height: 24),

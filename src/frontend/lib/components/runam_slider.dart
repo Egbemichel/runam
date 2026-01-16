@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lottie/lottie.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../app/theme.dart';
 
 class RunAmSlider extends StatefulWidget {
@@ -100,11 +100,10 @@ class _RunAmSliderState extends State<RunAmSlider> with TickerProviderStateMixin
               Text(
                 widget.buttonText,
                 style: widget.textStyle ??
-                    const TextStyle(
+                    GoogleFonts.shantellSans(
                       fontSize: 42,
                       fontWeight: FontWeight.bold,
                       color: AppTheme.primary700,
-                      fontFamily: 'Shantell Sans',
                     ),
               ),
               Positioned(
@@ -119,25 +118,7 @@ class _RunAmSliderState extends State<RunAmSlider> with TickerProviderStateMixin
                     color: widget.circleColor ?? AppTheme.primary500,
                   ),
                   child: Center(
-                    child: _isRunning
-                        ? Lottie.asset(
-                            'assets/animations/running.json',
-                            width: 40,
-                            height: 40,
-                            fit: BoxFit.contain,
-                            delegates: LottieDelegates(
-                              values: [
-                                ValueDelegate.colorFilter(
-                                  const ['**'],
-                                  value: const ColorFilter.mode(
-                                    AppTheme.primary700,
-                                    BlendMode.srcIn,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : Stack(
+                    child: Stack(
                             alignment: Alignment.center,
                             children: [
                               // First arrow with lower opacity
