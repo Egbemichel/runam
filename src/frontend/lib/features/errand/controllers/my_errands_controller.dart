@@ -1,85 +1,73 @@
-import 'dart:async';
+// language: dart
+// File: lib/controllers/my_errands_controller.dart
 
 import 'package:get/get.dart';
+import 'package:graphql_flutter/graphql_flutter.dart';
 
-import '../models/errand.dart';
+import '../../../services/graphql_client.dart';
 import '../services/errand_service.dart';
+import '../models/errand.dart';
 
-/// Controller for managing user's errands with filtering and real-time updates
 class MyErrandsController extends GetxController {
-  final ErrandService _errandService = Get.find<ErrandService>();
+  final GraphQLClient gqlClient;
+  final dynamic socketService; // ErrandSocketService
+  final int? userId;
 
-  // All errands
-  final errands = <Errand>[].obs;
+  MyErrandsController({
+    GraphQLClient? gqlClient,
+    this.socketService,
+    this.userId,
+  }) : gqlClient = gqlClient ?? GraphQLClientInstance.client;
 
-  // Loading state
+  final RxList<Map<String, dynamic>> offers = <Map<String, dynamic>>[].obs;
+
+  // Errands state used by the UI
+  final RxList<Errand> errands = <Errand>[].obs;
   final isLoading = false.obs;
-
-  // Error message
   final errorMessage = RxnString();
 
-  // Selected filter
-  final selectedFilter = Rx<ErrandStatus?>(null);
+  // Filter state
+  final selectedFilter = Rxn<ErrandStatus>();
 
-  // Timer for checking expiry
-  Timer? _expiryCheckTimer;
+  final ErrandService _errandService = ErrandService();
 
   @override
   void onInit() {
     super.onInit();
+    if (socketService != null && userId != null) {
+      try {
+        socketService.connect(userId: userId);
+        socketService.events.listen(_handleSocketEvent);
+      } catch (_) {}
+    }
+
+    // Initial fetch
     fetchErrands();
-    _startExpiryCheck();
   }
 
-  @override
-  void onClose() {
-    _expiryCheckTimer?.cancel();
-    super.onClose();
-  }
-
-  /// Start periodic check for expired errands
-  void _startExpiryCheck() {
-    _expiryCheckTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _checkExpiredErrands(),
-    );
-  }
-
-  /// Check and update expired errands locally
-  void _checkExpiredErrands() {
-    final now = DateTime.now();
-    bool hasChanges = false;
-
-    for (int i = 0; i < errands.length; i++) {
-      final errand = errands[i];
-      // If errand is pending and has expired, update its status
-      if (errand.status == ErrandStatus.pending &&
-          errand.isOpen &&
-          now.isAfter(errand.expiresAt)) {
-        errands[i] = errand.copyWith(
-          status: ErrandStatus.expired,
-          isOpen: false,
-        );
-        hasChanges = true;
-      }
-    }
-
-    if (hasChanges) {
-      errands.refresh();
+  void _handleSocketEvent(Map<String, dynamic> event) {
+    final type = event['type'];
+    if (type == 'errand.offer') {
+      // Ex: event contains offer_id, errand_id, position, expires_at
+      final offer = {
+        'offer_id': event['offer_id'],
+        'errand_id': event['errand_id'],
+        'position': event['position'],
+        'expires_at': event['expires_at'],
+        'raw': event,
+      };
+      offers.insert(0, offer);
+      // Optionally notify UI (local notification / modal)
     }
   }
 
-  /// Fetch all errands for the current user
+  /// Fetch errands from backend and populate state
   Future<void> fetchErrands() async {
+    isLoading.value = true;
+    errorMessage.value = null;
     try {
-      isLoading.value = true;
-      errorMessage.value = null;
-
-      final fetchedErrands = await _errandService.fetchMyErrands();
-      errands.assignAll(fetchedErrands);
-
-      // Check for any already expired errands
-      _checkExpiredErrands();
+      final fetched = await _errandService.fetchMyErrands();
+      errands.assignAll(fetched);
     } catch (e) {
       errorMessage.value = 'Failed to load errands: $e';
     } finally {
@@ -87,70 +75,84 @@ class MyErrandsController extends GetxController {
     }
   }
 
-  /// Get errands filtered by status
+  Future<void> refreshErrands() async => fetchErrands();
+
+  /// Returns errands filtered by status
   List<Errand> get filteredErrands {
-    if (selectedFilter.value == null) {
-      return errands;
-    }
+    if (selectedFilter.value == null) return errands;
     return errands.where((e) => e.status == selectedFilter.value).toList();
   }
 
-  /// Get pending errands (searching for runner)
-  List<Errand> get pendingErrands =>
-      errands.where((e) => e.status == ErrandStatus.pending).toList();
+  void setFilter(ErrandStatus? status) => selectedFilter.value = status;
 
-  /// Get accepted/in-progress errands
-  List<Errand> get acceptedErrands =>
-      errands.where((e) => e.status == ErrandStatus.accepted).toList();
-
-  /// Get completed errands
-  List<Errand> get completedErrands =>
-      errands.where((e) => e.status == ErrandStatus.completed).toList();
-
-  /// Get expired errands
-  List<Errand> get expiredErrands =>
-      errands.where((e) => e.status == ErrandStatus.expired).toList();
-
-  /// Get cancelled errands
-  List<Errand> get cancelledErrands =>
-      errands.where((e) => e.status == ErrandStatus.cancelled).toList();
-
-  /// Get count by status
+  /// Count helper for chips
   int getCountByStatus(ErrandStatus? status) {
     if (status == null) return errands.length;
     return errands.where((e) => e.status == status).length;
   }
 
-  /// Set filter
-  void setFilter(ErrandStatus? status) {
-    selectedFilter.value = status;
-  }
-
-  /// Cancel an errand
+  /// Cancel an errand and update local state
   Future<bool> cancelErrand(String errandId) async {
     try {
       await _errandService.cancelErrand(errandId);
-
-      // Update local state
-      final index = errands.indexWhere((e) => e.id == errandId);
-      if (index != -1) {
-        errands[index] = errands[index].copyWith(
-          status: ErrandStatus.cancelled,
+      // mark as expired locally
+      final idx = errands.indexWhere((e) => e.id == errandId);
+      if (idx != -1) {
+        final e = errands[idx];
+        errands[idx] = Errand(
+          id: e.id,
+          type: e.type,
+          tasks: e.tasks,
+          speed: e.speed,
+          paymentMethod: e.paymentMethod,
+          goTo: e.goTo,
+          returnTo: e.returnTo,
+          imageUrl: e.imageUrl,
+          status: ErrandStatus.expired,
           isOpen: false,
+          createdAt: e.createdAt,
+          expiresAt: e.expiresAt,
+          runnerId: e.runnerId,
+          runnerName: e.runnerName,
+          price: e.price,
         );
-        errands.refresh();
       }
-
+      errands.refresh();
       return true;
     } catch (e) {
-      errorMessage.value = 'Failed to cancel errand: $e';
       return false;
     }
   }
 
-  /// Refresh errands from server
-  Future<void> refreshErrands() async {
-    await fetchErrands();
+  Future<bool> acceptOffer(int offerId) async {
+    const String mutation = r'''
+      mutation AcceptErrandOffer($offerId: ID!) {
+        acceptErrandOffer(offerId: $offerId) {
+          ok
+        }
+      }
+    ''';
+
+    final result = await gqlClient.mutate(MutationOptions(
+      document: gql(mutation),
+      variables: {'offerId': offerId.toString()},
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+
+    if (result.hasException) {
+      return false;
+    }
+
+    final ok = result.data?['acceptErrandOffer']?['ok'] as bool? ?? false;
+    if (ok) {
+      offers.removeWhere((o) => o['offer_id'] == offerId);
+    }
+    return ok;
+  }
+
+  @override
+  void onClose() {
+    socketService.disconnect();
+    super.onClose();
   }
 }
-

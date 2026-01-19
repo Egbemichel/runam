@@ -1,4 +1,3 @@
-import 'dart:convert';
 import '../../../models/place_models.dart';
 
 class ErrandTaskDraft {

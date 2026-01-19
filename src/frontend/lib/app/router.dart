@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:runam/features/errand/screens/errand_searching.dart';
 import 'package:runam/screens/profile/profile_screen.dart';
 import '../features/errand/screens/add_errand.dart';
 import '../features/errand/screens/my_errands_screen.dart';
@@ -50,6 +51,15 @@ final appRouter = GoRouter(
       name: MyErrandsScreen.routeName,
       builder: (_, __) => const MyErrandsScreen(),
     ),
+    GoRoute(
+      parentNavigatorKey: rootNavigatorKey,
+      path: ErrandSearchingScreen.path + '/:errandId',
+      name: ErrandSearchingScreen.routeName,
+      builder: (context, state) {
+        final errandId = state.pathParameters['errandId']!;
+        return ErrandSearchingScreen(errandId: errandId);
+      },
+    )
   ],
 );
 

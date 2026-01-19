@@ -7,6 +7,7 @@ import 'package:runam/services/graphql_client.dart';
 import 'controllers/auth_controller.dart';
 import 'controllers/location_controller.dart';
 import 'app/app.dart';
+import 'app/graphql_provider_wrapper.dart';
 import 'features/errand/controllers/errand_draft_controller.dart';
 import 'features/errand/services/errand_service.dart';
 
@@ -25,5 +26,5 @@ Future<void> main() async {
   Get.put(ErrandDraftController(), permanent: true);
   Get.put(ErrandController());
 
-  runApp(const RunAmApp());
+  runApp(GraphQLProviderWrapper(child: const RunAmApp()));
 }

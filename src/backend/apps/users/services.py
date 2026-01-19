@@ -1,3 +1,5 @@
+from typing import Any, Mapping
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from google.auth.transport import requests
@@ -12,7 +14,7 @@ from graphql_jwt.refresh_token.shortcuts import create_refresh_token
 User = get_user_model()
 
 
-def verify_google_id_token(id_token_str: str) -> dict:
+def verify_google_id_token(id_token_str: str):
     try:
         return id_token.verify_oauth2_token(
             id_token_str,
