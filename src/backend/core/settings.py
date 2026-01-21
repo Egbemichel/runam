@@ -50,6 +50,9 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
 
+    # Channels (optional for WebSockets)
+    'channels',
+
     # Local apps
     'apps.users.apps.UsersConfig',
     'apps.errands.apps.ErrandsConfig',
@@ -61,7 +64,7 @@ INSTALLED_APPS = [
 ]
 
 SITE_ID = 1
-
+ASGI_APPLICATION  = 'core.asgi.application'
 # -------------------------------------------------------------------
 # Middleware
 # -------------------------------------------------------------------
@@ -196,3 +199,57 @@ SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
 # Errand configuration
 # -------------------------------------------------------------------
 ERRAND_TTL_MINUTES = int(os.getenv('ERRAND_TTL_MINUTES', '30'))
+
+# Channels / WebSocket config
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+        },
+    },
+}
+# Celery configuration
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Development convenience: if using the in-memory broker, run tasks eagerly in-process
+if CELERY_BROKER_URL and CELERY_BROKER_URL.startswith('memory'):
+    # Execute tasks synchronously (Celery .delay will run the task inline)
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
+else:
+    CELERY_TASK_ALWAYS_EAGER = False
+    CELERY_TASK_EAGER_PROPAGATES = False
+
+# -------------------------------------------------------------------
+# Webhook configuration
+# -------------------------------------------------------------------
+# Webhook endpoints (comma-separated in WEBHOOK_URLS env)
+WEBHOOK_URLS = [u for u in os.getenv('WEBHOOK_URLS', '').split(',') if u]
+
+# Basic logging for development: print INFO+ to console
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {'format': '%(asctime)s %(levelname)s %(name)s %(message)s'},
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+    },
+    'loggers': {
+        'django': {'handlers': ['console'], 'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO')},
+    },
+}

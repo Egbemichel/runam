@@ -80,9 +80,29 @@ class AppUser {
     };
   }
 
+  /// Returns a copy of this AppUser with optional updated fields.
+  AppUser copyWith({
+    String? id,
+    String? name,
+    String? email,
+    String? avatar,
+    int? trustScore,
+    List<String>? roles,
+    List<UserLocation>? locations,
+  }) {
+    return AppUser(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      email: email ?? this.email,
+      avatar: avatar ?? this.avatar,
+      trustScore: trustScore ?? this.trustScore,
+      roles: roles ?? this.roles,
+      locations: locations ?? this.locations,
+    );
+  }
+
   @override
   String toString() {
     return 'AppUser(id: $id, name: $name, email: $email, trustScore: $trustScore, roles: $roles)';
   }
 }
-

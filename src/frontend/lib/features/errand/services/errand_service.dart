@@ -3,10 +3,14 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:get/get.dart';
+import 'package:get/get_core/src/get_main.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import '../../../controllers/location_controller.dart';
+import '../../../graphql/errand_queries.dart';
 import '../../../services/graphql_client.dart';
 import '../models/errand.dart';
 import '../models/errand_draft.dart';
@@ -17,103 +21,97 @@ class ErrandService {
 
   /// Creates an errand with optional image upload
   /// Image is uploaded separately and the URL is included in the errand data
-  Future<void> createErrand(ErrandDraft draft, {File? image}) async {
-    debugPrint('$_tag === CREATE ERRAND ===');
-    debugPrint('$_tag Draft received:');
-    debugPrint('$_tag   Type: ${draft.type}');
-    debugPrint('$_tag   Tasks: ${draft.tasks}');
-    debugPrint('$_tag   Speed: ${draft.speed}');
-    debugPrint('$_tag   Payment: ${draft.paymentMethod}');
-    debugPrint('$_tag   GoTo: ${draft.goTo?.name} (${draft.goTo?.latitude}, ${draft.goTo?.longitude})');
-    debugPrint('$_tag   ReturnTo: ${draft.returnTo?.name}');
-    debugPrint('$_tag   Has image: ${image != null}');
+  Future<Map<String, dynamic>> createErrand(ErrandDraft draft, {File? image}) async {
+    debugPrint('$_tag === CREATE ERRAND: Service layer ===');
 
-    final GraphQLClient client = GraphQLClientInstance.client;
-
-    // Handle image upload using the backend's store_uploaded_file logic
+    // 1. Upload Image if exists
     String? imageUrl;
     if (image != null) {
-      debugPrint('$_tag [LOG] Image file provided. Starting image upload process...');
-      final imageStopwatch = Stopwatch()..start();
       try {
-        // Assuming uploadImage is a function that handles the file upload
         imageUrl = await uploadImage(image);
-        imageStopwatch.stop();
-        debugPrint('$_tag [LOG] Image uploaded successfully in ${imageStopwatch.elapsedMilliseconds}ms.');
-        debugPrint('$_tag [LOG] Image URL received: $imageUrl');
       } catch (e) {
         debugPrint('$_tag [ERROR] Image upload failed: $e');
-        // Re-throw the exception to stop the errand creation process
         throw Exception('Image upload failed: $e');
       }
-    } else {
-      debugPrint('$_tag [LOG] No image file provided. Skipping image upload.');
     }
 
+    // 2. Get User Location from LocationController
+    final locController = Get.find<LocationController>();
+    final userLocPayload = locController.toPayload();
+
+    final client = GraphQLClientInstance.client;
+
+    // Mutation remains the same as votre version
     const mutation = r'''
-      mutation CreateErrand(
-        $type: String!
-        $tasks: JSONString!
-        $speed: String!
-        $paymentMethod: String
-        $goTo: JSONString!
-        $returnTo: JSONString
-        $imageUrl: String
+    mutation CreateErrand(
+      $type: String!,
+      $tasks: JSONString!,
+      $speed: String!,
+      $paymentMethod: String,
+      $goTo: JSONString!,
+      $returnTo: JSONString,
+      $imageUrl: String,
+      $userLocation: JSONString
+    ) {
+      createErrand(
+        type: $type,
+        tasks: $tasks,
+        speed: $speed,
+        paymentMethod: $paymentMethod,
+        goTo: $goTo,
+        returnTo: $returnTo,
+        imageUrl: $imageUrl,
+        userLocation: $userLocation
       ) {
-        createErrand(
-          type: $type
-          tasks: $tasks
-          speed: $speed
-          paymentMethod: $paymentMethod
-          goTo: $goTo
-          returnTo: $returnTo
-          imageUrl: $imageUrl
-        ) {
-            errandId
+        errandId
+        runners {
+          id
+          name
+          latitude
+          longitude
+          trustScore
+          distanceM
         }
       }
-    ''';
+    }
+  ''';
 
+    // FIX: Remove jsonEncode(). Pass the Maps and Lists directly.
     final variables = {
       "type": draft.type,
-      "tasks": jsonEncode(draft.tasks.map((t) => t.toJson()).toList()),
+      "tasks": jsonEncode(draft.tasks.map((t) => t.toJson()).toList()), // List<Map> encodée
       "speed": draft.speed,
       "paymentMethod": draft.paymentMethod,
-      "goTo": jsonEncode(draft.goTo!.toPayload()),
-      "returnTo": draft.returnTo != null ? jsonEncode(draft.returnTo!.toPayload()) : null,
+      "goTo": jsonEncode(draft.goTo?.toPayload()), // Map encodé
+      "returnTo": draft.returnTo != null ? jsonEncode(draft.returnTo?.toPayload()) : null, // Map ou null encodé
       "imageUrl": imageUrl,
+      "userLocation": userLocPayload.isNotEmpty ? jsonEncode(userLocPayload) : null, // Map encodé
     };
 
-    debugPrint('$_tag [LOG] Preparing to send GraphQL mutation with the following variables:');
-    debugPrint(jsonEncode(variables)); // Using jsonEncode for clear, structured logging
+    debugPrint('$_tag [STEP] Sending mutation with variables: $variables');
 
-
-    final stopwatch = Stopwatch()..start();
-    debugPrint('$_tag [LOG] Sending create_errand mutation');
     final result = await client.mutate(
       MutationOptions(
         document: gql(mutation),
         variables: variables,
+        fetchPolicy: FetchPolicy.networkOnly,
       ),
     );
 
-    stopwatch.stop();
-    debugPrint('$_tag [LOG] GraphQL response received in ${stopwatch.elapsedMilliseconds}ms.');
-
     if (result.hasException) {
-      debugPrint('$_tag [ERROR] GraphQL mutation failed. Exception: ${result.exception}');
+      debugPrint('$_tag [ERROR] GraphQL failure: ${result.exception}');
       throw result.exception!;
     }
 
-    final errandId = result.data?['createErrand']?['errandId'];
+    final data = result.data?['createErrand'];
+    final String? errandId = data?['errandId'];
+    final runners = data?['runners'] ?? [];
+
     if (errandId != null) {
-      debugPrint('$_tag [SUCCESS] Errand created successfully!');
-      debugPrint('$_tag [SUCCESS] New Errand ID: $errandId');
+      return {'errandId': errandId, 'runners': runners};
     } else {
-      debugPrint('$_tag [ERROR] Errand creation succeeded but no errandId was returned in the response.');
-      throw Exception('Failed to create errand: No errand ID returned.');
+      throw Exception('No errandId returned from server.');
     }
-    debugPrint('$_tag === CREATE ERRAND: Execution Finished ===');
   }
 
   /// Fetch all errands for the current user
@@ -133,10 +131,11 @@ query MyErrands {
     expiresAt
     runnerId
     runnerName
+    runnerTrustScore
     price
     tasks {
-    description
-    price
+      description
+      price
     }
     goTo {
       address
@@ -431,6 +430,67 @@ query MyErrands {
     }
   }
 
+  Future<Map<String, dynamic>> fetchErrandStatus(
+      GraphQLClient client,
+      String errandId,
+      ) async {
+    final result = await client.query(
+      QueryOptions(
+        document: gql(errandStatusQuery),
+        variables: {
+          'id': errandId,
+        },
+        fetchPolicy: FetchPolicy.networkOnly,
+      ),
+    );
+
+    if (result.hasException) {
+      throw result.exception!;
+    }
+
+    return result.data!['errand'];
+  }
+
+  Future<void> acceptErrandOffer(
+      GraphQLClient client,
+      String offerId,
+      ) async {
+    const mutation = r'''
+      mutation AcceptErrandOffer(
+        $offerId: ID!
+      ) {
+        acceptErrandOffer(offerId: $offerId) {
+          success
+          message
+        }
+      }
+    ''';
+    final result = await client.mutate(
+      MutationOptions(
+        document: gql(mutation),
+        variables: {
+          'offerId': offerId,
+        },
+      ),
+    );
+
+    if (result.hasException) {
+      throw result.exception!;
+    }
+
+    final dynamic successRaw = result.data?['acceptErrandOffer']?['success'];
+    final bool success = (successRaw is bool)
+        ? successRaw
+        : (successRaw is num)
+            ? successRaw != 0
+            : (successRaw?.toString().toLowerCase() == 'true' || successRaw?.toString() == '1');
+
+    if (!success) {
+      throw Exception("Acceptance failed");
+    }
+  }
+
+
 
   Future<Map<String, dynamic>> saveErrandDraft(Map<String, dynamic> draftJson) async {
     final GraphQLClient client = GraphQLClientInstance.client;
@@ -457,5 +517,72 @@ query MyErrands {
     }
 
     return result.data?["saveErrandDraft"] ?? {};
+  }
+
+  /// Fetch all errands assigned to the current runner (if backend exposes it)
+  Future<List<Errand>> fetchAssignedErrands() async {
+    final GraphQLClient client = GraphQLClientInstance.client;
+
+    // Try a list of common names the backend might expose. We will try sequentially
+    // and return on first success.
+    final candidates = <String>['myAssignedErrands', 'assignedErrands', 'myRuns'];
+
+    // GraphQL field selection used for the query body (same shape as myErrands)
+    final selection = r'''
+        id
+        type
+        speed
+        paymentMethod
+        imageUrl
+        status
+        isOpen
+        createdAt
+        expiresAt
+        runnerId
+        runnerName
+        runnerTrustScore
+        price
+        tasks { description price }
+        goTo { address latitude longitude mode }
+        returnTo { address latitude longitude mode }
+    ''';
+
+    dynamic lastException;
+    for (final fieldName in candidates) {
+      final query = """
+      query {
++        $fieldName {
++          $selection
++        }
++      }
++      """;
+
+      debugPrint('🏃 [ErrandService] Trying assigned errands query "$fieldName"');
+
+      try {
+        final result = await client.query(QueryOptions(document: gql(query), fetchPolicy: FetchPolicy.networkOnly));
+
+        if (result.hasException) {
+          debugPrint('🏃 [ErrandService] Query "$fieldName" failed: ${result.exception}');
+          lastException = result.exception;
+          // Try next candidate
+          continue;
+        }
+
+        final List<dynamic> errandsData = result.data?[fieldName] ?? [];
+        debugPrint('🏃 [ErrandService] Query "$fieldName" returned ${errandsData.length} assigned errands');
+        return errandsData.map((e) => Errand.fromJson(e as Map<String, dynamic>)).toList();
+      } catch (e) {
+        debugPrint('🏃 [ErrandService] Exception while querying "$fieldName": $e');
+        lastException = e;
+        // Try next candidate
+        continue;
+      }
+    }
+
+    // If we reach here, all attempts failed
+    final msg = 'No supported assigned-errands query found on server. Last error: $lastException';
+    debugPrint('🏃 [ErrandService] $msg');
+    throw Exception(msg);
   }
 }

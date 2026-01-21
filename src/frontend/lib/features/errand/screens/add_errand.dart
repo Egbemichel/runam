@@ -12,6 +12,8 @@ import '../../../controllers/location_controller.dart';
 import '../controllers/errand_controllers.dart';
 import '../controllers/errand_draft_controller.dart';
 import '../components/task_list_input.dart'; // The dynamic task widget
+import '../screens/errand_searching.dart';
+import '../services/errand_service.dart';
 
 class AddErrandScreen extends StatefulWidget {
   const AddErrandScreen({super.key});
@@ -40,6 +42,7 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
   final locationController = Get.find<LocationController>();
   late final ErrandController errandController;
   late final ErrandDraftController draftController;
+  late final ErrandService errandService;
 
   final List<String> _speedOptions = ['10mins', '15mins', '30mins'];
 
@@ -49,6 +52,7 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
     authController = Get.find<AuthController>();
     errandController = Get.find<ErrandController>();
     draftController = Get.find<ErrandDraftController>();
+    errandService = Get.find<ErrandService>();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadSavedDraft();
@@ -58,17 +62,17 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
     returnToController.addListener(_onTextChanged);
   }
 
-  String? _normalizeSpeed(String? raw) {
-    if (raw == null) return null;
-    // Remove whitespace and unify to pattern like "10mins"
-    var s = raw.replaceAll(RegExp(r'\s+'), '').toLowerCase();
-    if (RegExp(r'^\d+$').hasMatch(s)) {
-      s = '${s}mins';
-    } else if (s.endsWith('min') && !s.endsWith('mins')) {
-      s = '${s}s';
-    }
-    return s;
-  }
+  // String? _normalizeSpeed(String? raw) {
+  //   if (raw == null) return null;
+  //   // Remove whitespace and unify to pattern like "10mins"
+  //   var s = raw.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+  //   if (RegExp(r'^\d+$').hasMatch(s)) {
+  //     s = '${s}mins';
+  //   } else if (s.endsWith('min') && !s.endsWith('mins')) {
+  //     s = '${s}s';
+  //   }
+  //   return s;
+  // }
 
   String _formatSpeedLabel(String value) {
     // value is like "10mins" -> show "10 mins"
@@ -201,19 +205,16 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
               _buildStep(5, "Payment", _buildPaymentPicker(), isLast: true),
 
               const SizedBox(height: 40),
-              Obx(() => RunAmSlider(
-                buttonText: "Request",
-                enabled: isFormComplete,
-                onComplete: () async {
-                  try {
-                    await errandController.createErrand();
-                    await draftController.clearDraft();
-                    if (mounted) Navigator.of(context).pop();
-                  } catch (e) {
-                    Get.snackbar("Error", e.toString(), backgroundColor: AppTheme.error);
-                  }
-                },
-              )),
+              Obx(() {
+                return RunAmSlider(
+                  buttonText: "Request",
+                  enabled: isFormComplete,
+                  // Provide a synchronous callback; start async work without returning Future
+                  onComplete: () {
+                    _handleSliderComplete();
+                  },
+                );
+              }),
               const SizedBox(height: 40),
             ],
           ),
@@ -548,5 +549,48 @@ class _AddErrandScreenState extends State<AddErrandScreen> with TickerProviderSt
       selectedImage = null;
     });
     errandController.setImage(null);
+  }
+
+  // Async handler for the slider completion. Separated so the RunAmSlider onComplete remains a void callback.
+  Future<void> _handleSliderComplete() async {
+    try {
+      // 1. Utilise directement le service pour obtenir le résultat complet
+      final result = await errandService.createErrand(
+        errandController.draft.value,
+        image: errandController.selectedImage.value,
+      );
+      final errandId = result['errandId']?.toString();
+      final initialRunnersRaw = result['runners'];
+      final List<Map<String, dynamic>> initialRunners =
+        (initialRunnersRaw is List)
+          ? initialRunnersRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+          : <Map<String, dynamic>>[];
+
+      debugPrint("Errand created with ID: $errandId. Initial runners: {initialRunners.length}");
+
+      await draftController.clearDraft();
+
+      if (!mounted) return;
+
+      // 2. Navigate and pass the runners list directly into the constructor
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ErrandSearchingScreen(
+            errandId: errandId,
+            runners: initialRunners,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint("Error creating errand: $e");
+      // Safer snackbar call
+      Get.rawSnackbar(
+        title: "Error",
+        message: e.toString(),
+        backgroundColor: Colors.redAccent,
+        snackPosition: SnackPosition.BOTTOM,
+      );
+    }
   }
 }

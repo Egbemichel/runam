@@ -33,7 +33,7 @@ class OnboardingContent extends StatelessWidget {
           child: Container(
             height: 146,
             decoration: BoxDecoration(
-              color: AppTheme.secondary500.withOpacity(0.7),
+              color: AppTheme.secondary500.withValues(alpha: 0.7),
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(100),
               ),

@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
 
@@ -17,14 +16,14 @@ class UserLocation(models.Model):
 
     mode = models.CharField(
         max_length=10,
-        choices=LocationMode.choices,
+        choices=tuple(LocationMode.choices),
         default=LocationMode.STATIC,
     )
 
     latitude = models.FloatField()
     longitude = models.FloatField()
 
-    address = models.TextField(blank=True)
+    address = models.TextField(blank=True, null=True)
 
     updated_at = models.DateTimeField(auto_now=True)
 

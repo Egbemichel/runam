@@ -9,12 +9,32 @@ class ErrandCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Safe extraction of fields
-    final String fromLocation = errand.goTo.formattedAddress;
-    final String toLocation = errand.returnTo?.formattedAddress ?? 'Unknown';
+    // Safe extraction of fields (null-aware)
+    final String fromLocation = errand?.goTo?.formattedAddress ?? '';
+    final String toLocation = errand?.returnTo?.formattedAddress ?? 'Unknown';
     final dateTime = errand?.createdAtFormatted ?? '---';
     final runnerName = errand?.runnerName ?? 'runnerName';
-    final runnerScore = "${errand?.runnerScore?.toString()}";
+    // Safely extract runner score from multiple possible shapes (model field, nested runner map, string/num)
+    double _parseScore(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      final s = v.toString();
+      return double.tryParse(s) ?? 0.0;
+    }
+
+    dynamic rawScore;
+    try {
+      rawScore = errand?.runnerScore ?? errand?.runnerScoreValue ?? (errand?.runner is Map ? errand?.runner['trustScore'] : null);
+    } catch (e) {
+      rawScore = null;
+      debugPrint('[ErrandCard] rawScore extraction error: $e');
+    }
+    // Debug: log rawScore and its runtimeType to diagnose type issues
+    debugPrint('[ErrandCard] rawScore=$rawScore runtimeType=${rawScore?.runtimeType} runnerScoreField=${errand?.runnerScore} runnerScoreValue=${errand?.runnerScoreValue}');
+    final scoreVal = _parseScore(rawScore);
+    final runnerScore = scoreVal.toStringAsFixed(0);
     final timeTaken = "${errand?.speed }";
     final amount = "XAF ${errand?.price ?? 0}";
     final paymentMethod = errand?.paymentMethod ?? 'CASH';

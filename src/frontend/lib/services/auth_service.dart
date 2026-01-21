@@ -202,9 +202,8 @@ class AuthService {
       'latitude': latitude,
       'longitude': longitude,
     };
-    if (address != null && address.isNotEmpty) {
-      variables['address'] = address;
-    }
+    // Correction : toujours fournir une chaîne non nulle pour address
+    variables['address'] = (address != null && address.isNotEmpty) ? address : '';
 
     try {
       final stopwatch = Stopwatch()..start();
@@ -285,5 +284,3 @@ class AuthResponse {
     required this.user,
   });
 }
-
-

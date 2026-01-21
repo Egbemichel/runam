@@ -37,14 +37,14 @@ class GraphQLClientInstance {
     // Error link: refresh token once per request
     final errorLink = ErrorLink(
       onGraphQLError: (request, forward, response) async* {
-        final hasExpired = response?.errors?.any(
+        final hasExpired = response.errors?.any(
               (e) => e.message.contains('Signature has expired'),
         ) ?? false;
 
         final attempted = request.context.entry<HttpLinkHeaders>()?.headers['x-refresh-attempted'] == 'true';
 
         if (!hasExpired || attempted) {
-          yield response!;
+          yield response;
           return;
         }
 

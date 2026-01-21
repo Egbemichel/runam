@@ -1,3 +1,4 @@
+# type: ignore
 import graphene
 import graphql_jwt
 from django.contrib.auth import get_user_model
@@ -6,7 +7,7 @@ from graphql import GraphQLError
 from graphql_jwt.decorators import login_required
 from django.utils import timezone
 from datetime import timedelta
-from apps.errands.models import ErrandTask
+from apps.errands.models import ErrandTask, ErrandOffer
 
 from apps.errands.models import Errand
 from apps.locations.models import UserLocation, LocationMode
@@ -20,12 +21,29 @@ from apps.users.services import (
 )
 from errand_location.models import ErrandLocation
 from apps.errands.schema import UploadImage
+from runners.services import get_nearby_runners, distance_between
+from apps.errands.services import accept_offer as services_accept_offer
+
+import logging
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 # =====================
 # GRAPHQL TYPES
 # =====================
+
+
+class RunnerType(graphene.ObjectType):
+    id = graphene.ID()
+    name = graphene.String()
+    image_url = graphene.String()
+    trust_score = graphene.Float()
+    latitude = graphene.Float()
+    longitude = graphene.Float()
+    distance_m = graphene.Float()
+    has_pending_offer = graphene.Boolean()
 
 class RoleType(DjangoObjectType):
     class Meta:
@@ -80,6 +98,7 @@ class UserType(DjangoObjectType):
             "is_staff",
             "roles",
             "location",
+            "trust_score",
             # expose single location via resolver
         )
 
@@ -114,12 +133,22 @@ class ErrandTaskType(DjangoObjectType):
         model = ErrandTask
         fields = ("id", "description", "price")
 
+class ErrandStatusType(graphene.ObjectType):
+    errand_id = graphene.ID()
+    status = graphene.String()
+    is_open = graphene.Boolean()
+    expires_at = graphene.DateTime()
+    created_at = graphene.DateTime()
+    runner = graphene.Field(RunnerType)
+    nearby_runners = graphene.List(RunnerType)
+
 class ErrandType(DjangoObjectType):
     go_to = graphene.Field(ErrandLocationType)
     return_to = graphene.Field(ErrandLocationType)
 
     runnerId = graphene.String()
     runnerName = graphene.String()
+    runnerTrustScore = graphene.Int()
 
     # Frontend expects this
     price = graphene.Float()
@@ -162,16 +191,24 @@ class ErrandType(DjangoObjectType):
         return getattr(self.runner, "id", None) if hasattr(self, "runner") else None
 
     def resolve_runnerName(self, info):
-        return getattr(self.runner, "name", None) if hasattr(self, "runner") else None
+        profile = getattr(self.runner, "profile", None)
+        # Prefer profile name if available, otherwise fallback to user names
+        pname = getattr(profile, "name", None) if profile else None
+        if pname:
+            return pname
+        first = getattr(self.runner, 'first_name', '')
+        last = getattr(self.runner, 'last_name', '')
+        full = " ".join([n for n in [first, last] if n]).strip()
+        return full or None
+    def resolve_runnerTrustScore(self, info):
+        profile = getattr(self.runner, "profile", None)
+        return getattr(profile, "trust_score", None) if profile else None
 
     # --------------------
     # Tasks & pricing
     # --------------------
     def resolve_tasks(self, info):
         return self.tasks.all()
-
-    def resolve_errandValue(self, info):
-        return self.errand_value()
 
     def resolve_serviceFee(self, info):
         return self.service_fee()
@@ -251,8 +288,17 @@ class SaveErrandDraft(graphene.Mutation):
                 )
 
         # 🔁 Replace locations if provided
-        if data.get("go_to") or data.get("return_to"):
-            ErrandLocation.objects.filter(errand=errand).delete()
+        if data.get("go_to"):
+            ErrandLocation.objects.filter(
+                errand=errand,
+                mode=LocationMode.GO_TO
+            ).delete()
+
+        if data.get("return_to"):
+            ErrandLocation.objects.filter(
+                errand=errand,
+                mode=LocationMode.RETURN_TO
+            ).delete()
 
         if data.get("go_to"):
             ErrandLocation.objects.create(
@@ -340,24 +386,157 @@ class BecomeRunner(graphene.Mutation):
     @login_required
     def mutate(self, info):
         user = info.context.user
+
+        profile, _ = UserProfile.objects.get_or_create(user=user)
         runner_role = Role.objects.get(name=Role.RUNNER)
 
-        profile = getattr(user, "profile", None)
-        if not profile:
-            profile = UserProfile.objects.create(user=user)
-
-        if profile.roles.filter(id=runner_role.id).exists():
-            return BecomeRunner(ok=True)
-
         profile.roles.add(runner_role)
+
         return BecomeRunner(ok=True)
+
+
+class RunnerCandidate(graphene.ObjectType):
+    id = graphene.ID()
+    name = graphene.String()
+    latitude = graphene.Float()
+    longitude = graphene.Float()
+    # Graphene handles the conversion, but being explicit prevents frontend bugs
+    trust_score = graphene.Int(name="trustScore")
+    distance_m = graphene.Float(name="distanceM")
+    image_url = graphene.String(name="imageUrl")
+
+
+# New: Offer type used by polling queries (myPendingOffers)
+class ErrandOfferType(graphene.ObjectType):
+    id = graphene.ID()
+    errandId = graphene.ID()
+    price = graphene.Int()
+    expiresAt = graphene.DateTime()
+    expiresIn = graphene.Int()
+    errand = graphene.Field(ErrandType)
+
+    def resolve_id(self, info):
+        return str(self.id)
+
+    def resolve_errandId(self, info):
+        return getattr(self.errand, 'id', None)
+
+    def resolve_price(self, info):
+        # Price shown in offers is the errand's base value (frontend expects a numeric field)
+        try:
+            return int(self.errand.errand_value())
+        except Exception:
+            return None
+
+    def resolve_expiresAt(self, info):
+        return getattr(self, 'expires_at', None)
+
+    def resolve_expiresIn(self, info):
+        exp = getattr(self, 'expires_at', None)
+        if not exp:
+            return None
+        delta = exp - timezone.now()
+        return int(delta.total_seconds()) if delta.total_seconds() > 0 else 0
+
+    def resolve_errand(self, info):
+        return getattr(self, 'errand', None)
 
 # =====================
 # ERRAND MUTATIONS
 # =====================
 
+
+class AcceptErrandOffer(graphene.Mutation):
+    ok = graphene.Boolean()
+
+    class Arguments:
+        offer_id = graphene.ID(required=True)
+
+    @login_required
+    def mutate(self, info, offer_id):
+        user = info.context.user
+        logger.info("AcceptErrandOffer called by user=%s for offer_id=%s", getattr(user, 'id', None), offer_id)
+
+        try:
+            offer = ErrandOffer.objects.select_related("errand").get(
+                id=offer_id,
+                runner=user,
+                status=ErrandOffer.Status.PENDING
+            )
+        except Exception as e:
+            logger.exception("AcceptErrandOffer: failed to fetch offer=%s runner=%s: %s", offer_id, getattr(user, 'id', None), e)
+            raise GraphQLError("Offer not found or not permitted")
+
+        # Check expiry: if the offer already expired, mark it expired and abort
+        if offer.expires_at and offer.expires_at <= timezone.now():
+            offer.status = ErrandOffer.Status.EXPIRED
+            offer.save(update_fields=["status"])
+            logger.warning("AcceptErrandOffer: offer %s already expired", offer_id)
+            raise GraphQLError("Offer has expired")
+
+        offer.status = ErrandOffer.Status.ACCEPTED
+        offer.responded_at = timezone.now()
+        offer.save(update_fields=["status", "responded_at"])
+
+        logger.info("Offer %s marked ACCEPTED by runner %s", offer_id, getattr(user, 'id', None))
+
+        # Delegate the rest to the service layer which handles pricing and expiring other offers
+        try:
+            services_accept_offer(offer.errand, user)
+        except Exception as e:
+            logger.exception("AcceptErrandOffer: services_accept_offer failed for errand=%s runner=%s: %s", getattr(offer.errand, 'id', None), getattr(user, 'id', None), e)
+            raise GraphQLError("Failed to accept offer")
+
+        logger.info("accept_offer delegated for errand_id=%s runner=%s", offer.errand.id, getattr(user, 'id', None))
+
+        return AcceptErrandOffer(ok=True)
+
+
+class RejectErrandOffer(graphene.Mutation):
+    """Runner rejects an ErrandOffer: mark the offer REJECTED and record responded_at.
+    This does not expire other offers or change errand state; frontend polling will continue.
+    """
+    ok = graphene.Boolean()
+
+    class Arguments:
+        offer_id = graphene.ID(required=True)
+
+    @login_required
+    def mutate(self, info, offer_id):
+        user = info.context.user
+        logger.info("RejectErrandOffer called by user=%s for offer_id=%s", getattr(user, 'id', None), offer_id)
+
+        try:
+            offer = ErrandOffer.objects.select_related('errand').get(
+                id=offer_id,
+                runner=user,
+                status=ErrandOffer.Status.PENDING,
+            )
+        except Exception as e:
+            logger.exception("RejectErrandOffer: failed to fetch offer=%s runner=%s: %s", offer_id, getattr(user, 'id', None), e)
+            raise GraphQLError("Offer not found or not permitted")
+
+        # If already expired, mark expired and abort
+        if offer.expires_at and offer.expires_at <= timezone.now():
+            offer.status = ErrandOffer.Status.EXPIRED
+            offer.save(update_fields=['status'])
+            logger.warning("RejectErrandOffer: offer %s already expired", offer_id)
+            raise GraphQLError("Offer has expired")
+
+        # Mark rejected and persist
+        offer.status = ErrandOffer.Status.REJECTED
+        offer.responded_at = timezone.now()
+        offer.save(update_fields=['status', 'responded_at'])
+
+        logger.info("Offer %s marked REJECTED by runner %s", offer_id, getattr(user, 'id', None))
+
+        # No further side effects here; matching continues for other runners via polling.
+        return RejectErrandOffer(ok=True)
+
+
 class CreateErrand(graphene.Mutation):
     errand_id = graphene.ID()
+    runners = graphene.List(RunnerCandidate)
 
     class Arguments:
         type = graphene.String(required=True)
@@ -367,71 +546,189 @@ class CreateErrand(graphene.Mutation):
         go_to = graphene.JSONString(required=True)
         return_to = graphene.JSONString(required=False)
         image_url = graphene.String(required=False)
+        user_location = graphene.JSONString(required=False)  # Optional: {mode, latitude, longitude, address}
 
     @login_required
     def mutate(self, info, **kwargs):
         user = info.context.user
+        # Log entry and a short summary of the incoming payload for debugging 400s
+        logger.info("CreateErrand called by user=%s payload_keys=%s", getattr(user, 'id', None), list(kwargs.keys()))
 
-        user_location = getattr(user, "location", None)
-        mode = user_location.mode if user_location else LocationMode.STATIC
+        # Log HTTP request metadata/body snippet to help diagnose malformed requests (avoid printing secrets)
+        try:
+            request = info.context
+            content_type = getattr(request, 'content_type', None) or (request.META.get('CONTENT_TYPE') if hasattr(request, 'META') else None)
+            logger.debug("CreateErrand: HTTP content_type=%s", content_type)
+            # request.body may be bytes; log only a small prefix to avoid huge logs
+            raw = getattr(request, 'body', b'')
+            if raw:
+                snippet = raw[:1000] if isinstance(raw, (bytes, bytearray)) else str(raw)[:1000]
+                logger.debug("CreateErrand: HTTP body snippet=%s", snippet)
+        except Exception:
+            logger.exception("CreateErrand: failed to log raw HTTP request body")
 
-        # 1️⃣ Create Errand (NO instructions anymore)
-        errand = Errand.objects.create(
-            user=user,
-            type=kwargs["type"],
-            speed=kwargs["speed"],
-            payment_method=kwargs.get("payment_method"),
-            image_url=kwargs.get("image_url"),
-            expires_at=timezone.now() + timedelta(hours=2),
-        )
+        try:
+            # If the frontend provided a current device location for the authenticated user,
+            # upsert it now so matching uses the freshest coordinates.
+            user_location_payload = kwargs.get('user_location')
+            if user_location_payload:
+                try:
+                    logger.info("CreateErrand: user_location payload received for user=%s", getattr(user, 'id', None))
+                    # user_location_payload is a dict because Graphene JSONString is parsed
+                    ul_mode = user_location_payload.get('mode') or None
+                    ul_lat = user_location_payload.get('latitude')
+                    ul_lon = user_location_payload.get('longitude')
+                    ul_address = user_location_payload.get('address') or ''
 
-        # 2️⃣ Create tasks
-        tasks_data = kwargs["tasks"]
+                    logger.debug("CreateErrand: user_location details mode=%s lat=%s lon=%s addr=%s", ul_mode, ul_lat, ul_lon, ul_address)
 
-        if not isinstance(tasks_data, list) or len(tasks_data) == 0:
-            raise GraphQLError("At least one task is required")
+                    if ul_lat is not None and ul_lon is not None:
+                        # If mode provided and valid, use it; otherwise keep existing
+                        mode_to_save = ul_mode if ul_mode in (LocationMode.DEVICE, LocationMode.STATIC) else (getattr(getattr(user, 'location', None), 'mode', LocationMode.STATIC))
 
-        for task in tasks_data:
-            description = task.get("description")
-            price = task.get("price")
+                        # Upsert the user's UserLocation row
+                        UserLocation.objects.update_or_create(
+                            user=user,
+                            defaults={
+                                'mode': mode_to_save,
+                                'latitude': float(ul_lat),
+                                'longitude': float(ul_lon),
+                                'address': ul_address,
+                            }
+                        )
+                        logger.info("UserLocation upserted for user=%s mode=%s lat=%s lon=%s", getattr(user, 'id', None), mode_to_save, ul_lat, ul_lon)
+                except Exception as e:
+                    logger.exception("Failed to upsert UserLocation for user=%s: %s", getattr(user, 'id', None), e)
 
-            if not description or price is None:
-                raise GraphQLError("Each task must have description and price")
+            user_location = getattr(user, "location", None)
+            mode = user_location.mode if user_location else LocationMode.STATIC
 
-            ErrandTask.objects.create(
-                errand=errand,
-                description=description,
-                price=int(price),
-            )
+            # 1️⃣ Create Errand (NO instructions anymore)
+            try:
+                errand = Errand.objects.create(
+                    user=user,
+                    type=kwargs["type"],
+                    speed=kwargs["speed"],
+                    payment_method=kwargs.get("payment_method"),
+                    image_url=kwargs.get("image_url"),
+                    expires_at=timezone.now() + timedelta(hours=2),
+                )
+                logger.info("Errand created id=%s user=%s type=%s", errand.id, getattr(user, 'id', None), kwargs.get("type"))
+            except Exception as e:
+                logger.exception("Failed to create Errand for user=%s payload error: %s", getattr(user, 'id', None), e)
+                raise
 
-        # 3️⃣ Create GO-TO location
-        go_to_data = kwargs["go_to"]
-        go_to_loc = ErrandLocation.objects.create(
-            errand=errand,
-            address=go_to_data.get("address"),
-            latitude=go_to_data.get("latitude") or go_to_data.get("lat"),
-            longitude=go_to_data.get("longitude") or go_to_data.get("lng"),
-            mode=mode,
-        )
+            # 2️⃣ Create tasks
+            tasks_data = kwargs.get("tasks")
+            logger.debug("CreateErrand: tasks_payload=%s", tasks_data)
 
-        # 4️⃣ Optional RETURN-TO
-        return_to_loc = None
-        return_to_data = kwargs.get("return_to")
-        if return_to_data:
-            return_to_loc = ErrandLocation.objects.create(
-                errand=errand,
-                address=return_to_data.get("address"),
-                latitude=return_to_data.get("latitude") or return_to_data.get("lat"),
-                longitude=return_to_data.get("longitude") or return_to_data.get("lng"),
-                mode=mode,
-            )
+            if not isinstance(tasks_data, list) or len(tasks_data) == 0:
+                logger.warning("CreateErrand called with no tasks by user=%s", getattr(user, 'id', None))
+                raise GraphQLError("At least one task is required")
 
-        # 5️⃣ Attach locations
-        errand.go_to = go_to_loc
-        errand.return_to = return_to_loc
-        errand.save(update_fields=["go_to", "return_to"])
+            for idx, task in enumerate(tasks_data, start=1):
+                try:
+                    description = task.get("description")
+                    price = task.get("price")
 
-        return CreateErrand(errand_id=errand.id)
+                    if not description or price is None:
+                        logger.warning("Invalid task in CreateErrand by user=%s at index=%s: %s", getattr(user, 'id', None), idx, task)
+                        raise GraphQLError("Each task must have description and price")
+
+                    ErrandTask.objects.create(
+                        errand=errand,
+                        description=description,
+                        price=int(price),
+                    )
+                    logger.debug("Created ErrandTask for errand=%s: %s - %s", errand.id, description, price)
+                except GraphQLError:
+                    raise
+                except Exception as e:
+                    logger.exception("Failed creating task for errand=%s index=%s error=%s", getattr(errand, 'id', None), idx, e)
+                    raise GraphQLError("Failed creating task")
+
+            # 3️⃣ Create GO-TO location
+            go_to_data = kwargs.get("go_to")
+            logger.debug("CreateErrand: go_to payload=%s", go_to_data)
+            try:
+                go_to_loc = ErrandLocation.objects.create(
+                    errand=errand,
+                    address=go_to_data.get("address"),
+                    latitude=go_to_data.get("latitude") or go_to_data.get("lat"),
+                    longitude=go_to_data.get("longitude") or go_to_data.get("lng"),
+                    mode=mode,
+                )
+                logger.info("ErrandLocation GO_TO created for errand=%s lat=%s lng=%s", errand.id, go_to_loc.latitude, go_to_loc.longitude)
+            except Exception as e:
+                logger.exception("Failed to create GO_TO location for errand=%s: %s", getattr(errand, 'id', None), e)
+                raise GraphQLError("Invalid go_to location")
+
+            # 4️⃣ Optional RETURN-TO
+            return_to_loc = None
+            return_to_data = kwargs.get("return_to")
+            if return_to_data:
+                try:
+                    return_to_loc = ErrandLocation.objects.create(
+                        errand=errand,
+                        address=return_to_data.get("address"),
+                        latitude=return_to_data.get("latitude") or return_to_data.get("lat"),
+                        longitude=return_to_data.get("longitude") or return_to_data.get("lng"),
+                        mode=mode,
+                    )
+                    logger.info("ErrandLocation RETURN_TO created for errand=%s lat=%s lng=%s", errand.id, return_to_loc.latitude, return_to_loc.longitude)
+                except Exception as e:
+                    logger.exception("Failed to create RETURN_TO for errand=%s: %s", getattr(errand, 'id', None), e)
+                    raise GraphQLError("Invalid return_to location")
+
+            # 5️⃣ Attach locations
+            errand.go_to = go_to_loc
+            errand.return_to = return_to_loc
+            errand.save(update_fields=["go_to", "return_to"])
+            logger.debug("Errand %s saved with locations", errand.id)
+
+            # 6️⃣ Compute nearby runners and return them immediately to frontend
+            try:
+                candidates = get_nearby_runners(errand)
+                logger.info("Found %s candidate runners for errand=%s", len(candidates), errand.id)
+                runners_payload = []
+                for r in candidates:
+                    dist = distance_between(getattr(r, 'location', None), go_to_loc)
+                    profile = getattr(r, 'profile', None)
+                    runners_payload.append(RunnerCandidate(
+                        id=str(r.id),
+                        name=(getattr(profile, 'name', None) or f"{getattr(r, 'first_name', '')} {getattr(r, 'last_name', '')}".strip()),
+                        latitude=getattr(r.location, 'latitude', None),
+                        longitude=getattr(r.location, 'longitude', None),
+                        trust_score=getattr(profile, 'trust_score', None),
+                        distance_m=float(dist or 0.0),
+                    ))
+                    logger.debug("Candidate runner %s: distance_m=%s trust=%s", getattr(r, 'id', None), dist, getattr(profile, 'trust_score', None))
+            except Exception as ex:
+                logger.exception("Error computing nearby runners for errand=%s: %s", errand.id, ex)
+                runners_payload = []
+
+            # 7️⃣ Start matching process (async)
+            from apps.errands.tasks import start_errand_matching
+
+            # Run matching in a background thread so the HTTP response returns fast.
+            import threading
+            try:
+                logger.info("Starting start_errand_matching in background thread for errand=%s", errand.id)
+                threading.Thread(target=lambda: start_errand_matching(errand.id), daemon=True).start()
+            except Exception as e:
+                logger.exception("Failed to start background thread for start_errand_matching errand=%s: %s", errand.id, e)
+
+            logger.info("CreateErrand completed for errand=%s responding with %s candidates", errand.id, len(runners_payload))
+            return CreateErrand(errand_id=errand.id, runners=runners_payload)
+
+        except GraphQLError:
+            # GraphQL errors are expected for bad payloads; surface them but keep a log
+            logger.warning("CreateErrand: GraphQLError for user=%s payload_keys=%s", getattr(user, 'id', None), list(kwargs.keys()))
+            raise
+        except Exception as e:
+            # Unexpected error: log full details for debugging 400s and re-raise
+            logger.exception("CreateErrand: unexpected error for user=%s payload_keys=%s: %s", getattr(user, 'id', None), list(kwargs.keys()), e)
+            raise
 
 class FetchMyErrands(graphene.Mutation):
     class Arguments:
@@ -539,13 +836,127 @@ class DeleteErrand(graphene.Mutation):
 # =====================
 
 class Query(graphene.ObjectType):
+    errand_status = graphene.Field(ErrandStatusType, errand_id=graphene.ID(required=True))
+
+    def resolve_errand_status(self, info, errand_id):
+        user = info.context.user
+        if not user.is_authenticated:
+            raise Exception("Authentication required")
+
+        # 1. Fetch Errand
+        try:
+            errand = Errand.objects.get(id=errand_id, user=user)
+        except Errand.DoesNotExist:
+            return None
+
+        logger.info(f"[GraphQL] Poll for errand={errand_id}, status={errand.status}")
+
+        # 2. Map Base Data
+        result = ErrandStatusType(
+            errand_id=errand.id,
+            status=errand.status,
+            is_open=errand.is_open,
+            expires_at=errand.expires_at,
+            created_at=errand.created_at
+        )
+
+        # 3. Handle Assigned Runner
+        if errand.runner:
+            profile = getattr(errand.runner, 'profile', None)
+            loc = getattr(errand.runner, 'location', None)
+            result.runner = RunnerType(
+                id=errand.runner.id,
+                name=getattr(profile, 'name', f"{errand.runner.first_name} {errand.runner.last_name}").strip(),
+                image_url=getattr(profile, 'avatar', None),
+                trust_score=getattr(profile, 'trust_score', 0),
+                latitude=loc.latitude if loc else None,
+                longitude=loc.longitude if loc else None
+            )
+
+        # 4. Handle Nearby Runners (if Pending)
+        if errand.status == 'PENDING' and errand.is_open:
+            nearby_list = []
+            try:
+                candidates = get_nearby_runners(errand)[:10]
+                for runner in candidates:
+                    runner_loc = getattr(runner, 'location', None)
+                    if not runner_loc:
+                        continue
+
+                    profile = getattr(runner, 'profile', None)
+                    has_offer = ErrandOffer.objects.filter(
+                        errand=errand,
+                        runner=runner,
+                        status='PENDING'
+                    ).exists()
+
+                    nearby_list.append(RunnerType(
+                        id=runner.id,
+                        name=getattr(profile, 'name', f"{runner.first_name} {runner.last_name}").strip(),
+                        image_url=getattr(profile, 'avatar', None),
+                        latitude=float(runner_loc.latitude),
+                        longitude=float(runner_loc.longitude),
+                        trust_score=getattr(profile, 'trust_score', 0),
+                        distance_m=distance_between(runner_loc, errand.go_to),
+                        has_pending_offer=has_offer
+                    ))
+                result.nearby_runners = nearby_list
+            except Exception as e:
+                logger.exception(f"Error fetching nearby runners: {e}")
+                result.nearby_runners = []
+
+        return result
+
+
+class Query(graphene.ObjectType):
     my_errands = graphene.List(ErrandType)
+    # Exposed as `myPendingOffers` in GraphQL (Graphene will camelCase the field name)
+    my_pending_offers = graphene.List(ErrandOfferType, name='myPendingOffers')
+    # Added aliases to support frontend candidate queries for assigned errands
+    my_assigned_errands = graphene.List(ErrandType, name='myAssignedErrands')
+    assigned_errands = graphene.List(ErrandType, name='assignedErrands')
+    my_runs = graphene.List(ErrandType, name='myRuns')
 
     @login_required
     def resolve_my_errands(self, info, **kwargs):
         user = info.context.user
         return Errand.objects.filter(user=user).order_by("-created_at")
 
+    @login_required
+    def resolve_my_pending_offers(self, info, **kwargs):
+        user = info.context.user
+        now = timezone.now()
+        qs = ErrandOffer.objects.select_related('errand').filter(
+            runner=user,
+            status=ErrandOffer.Status.PENDING,
+            expires_at__gt=now
+        ).order_by('expires_at')
+        logger.info("resolve_my_pending_offers: user=%s found=%s", getattr(user, 'id', None), qs.count())
+        # Log each pending offer id & expiry to help debug 400s on frontend
+        for of in qs:
+            logger.debug("PendingOffer id=%s errand=%s expires_at=%s", getattr(of, 'id', None), getattr(getattr(of, 'errand', None), 'id', None), getattr(of, 'expires_at', None))
+        return qs
+
+    # Resolver helper: errands assigned to current authenticated runner
+    def _resolve_assigned_for_runner(self, info):
+        user = info.context.user
+        if not user.is_authenticated:
+            raise Exception("Authentication required")
+        qs = Errand.objects.filter(runner=user).order_by("-created_at")
+        logger.info("resolve_assigned_errands: runner=%s found=%s", getattr(user, 'id', None), qs.count())
+        return qs
+
+    @login_required
+    def resolve_my_assigned_errands(self, info, **kwargs):
+        return self._resolve_assigned_for_runner(info)
+
+    @login_required
+    def resolve_assigned_errands(self, info, **kwargs):
+        return self._resolve_assigned_for_runner(info)
+
+    @login_required
+    def resolve_my_runs(self, info, **kwargs):
+        return self._resolve_assigned_for_runner(info)
 
 # =====================
 # ROOT SCHEMA
@@ -567,6 +978,10 @@ class Mutation(graphene.ObjectType):
 
     # Errands
     create_errand = CreateErrand.Field()
+    # Expose accept errand offer mutation so frontend can call acceptErrandOffer(offerId: ...)
+    accept_errand_offer = AcceptErrandOffer.Field()
+    # Expose reject errand offer mutation so frontend can call rejectErrandOffer(offerId: ...)
+    reject_errand_offer = RejectErrandOffer.Field()
     fetch_my_errands = FetchMyErrands.Field()
     upload_image = UploadImage.Field()
     save_errand_draft = SaveErrandDraft.Field()
@@ -578,4 +993,3 @@ schema = graphene.Schema(
     query=Query,
     mutation=Mutation,
 )
-

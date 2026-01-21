@@ -1,8 +1,10 @@
 import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../../models/place_models.dart';
+import '../../../controllers/location_controller.dart';
+import '../../../services/auth_service.dart';
 import '../models/errand_draft.dart';
 import '../services/errand_service.dart';
 import '../models/errand.dart';
@@ -85,34 +87,90 @@ class ErrandController extends GetxController {
     selectedImage.value = image;
   }
 
-  Future<void> createErrand() async {
-    debugPrint('$_tag === CREATE ERRAND ===');
-    debugPrint('$_tag Validating draft...');
+  Future<String> createErrand() async {
+    debugPrint('$_tag === CREATE ERRAND: User triggered errand creation (slider) ===');
+    debugPrint('$_tag [STEP] Validating draft before creation...');
 
     // Validate required fields
     assert(draft.value.goTo != null, 'GoTo location is required');
-    assert(draft.value.tasks != null && draft.value.tasks!.isNotEmpty, 'Instructions are required');
+    assert(draft.value.tasks.isNotEmpty, 'Tasks are required');
     assert(draft.value.paymentMethod != null, 'Payment method is required');
 
-    debugPrint('$_tag Assertions passed');
-    debugPrint('$_tag Draft complete: ${draft.value.isComplete}');
+    debugPrint('$_tag [STEP] Validation passed. Draft complete: ${draft.value.isComplete}');
 
     if (!draft.value.isComplete) {
-      debugPrint('$_tag ❌ Errand is incomplete!');
+      debugPrint('$_tag [ERROR] Errand is incomplete!');
       throw Exception("Errand is incomplete");
     }
 
-    debugPrint('$_tag Calling ErrandService.createErrand...');
-    debugPrint('$_tag Draft payload: ${draft.value.toJson()}');
-    debugPrint('$_tag Has image: ${selectedImage.value != null}');
+    debugPrint('$_tag [STEP] Calling ErrandService.createErrand...');
+    debugPrint('$_tag [DATA] Draft payload: ${draft.value.toJson()}');
+    debugPrint('$_tag [DATA] Has image: ${selectedImage.value != null}');
 
-    // Create errand with optional image
-    await Get.find<ErrandService>().createErrand(
-      draft.value,
-      image: selectedImage.value,
-    );
+    // --- Upsert user's current location before creating the errand ---
+    try {
+      final locController = Get.find<LocationController>();
+      var locPayload = locController.toPayload();
 
-    debugPrint('$_tag ✅ Errand created successfully!');
+      // If DEVICE mode but we don't have a currentPosition, attempt to fetch a one-shot GPS reading
+      if (locPayload.isEmpty && locController.locationMode.value == LocationMode.device) {
+        debugPrint('$_tag [STEP] No cached device position; attempting one-shot GPS read');
+        try {
+          final Position pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+          );
+          locPayload = {
+            'mode': 'DEVICE',
+            'latitude': pos.latitude,
+            'longitude': pos.longitude,
+          };
+          debugPrint('$_tag [STEP] One-shot GPS read success: $locPayload');
+        } catch (e) {
+          debugPrint('$_tag [WARN] One-shot GPS read failed: $e');
+        }
+      }
+
+      if (locPayload.isNotEmpty) {
+        final mode = locPayload['mode'] as String? ?? 'DEVICE';
+        final latitude = (locPayload['latitude'] as num).toDouble();
+        final longitude = (locPayload['longitude'] as num).toDouble();
+        final address = locPayload['address'] as String?;
+
+        debugPrint('$_tag [STEP] Updating user location to backend before errand creation: $locPayload');
+        try {
+          await Get.find<AuthService>().updateLocation(
+            mode: mode,
+            latitude: latitude,
+            longitude: longitude,
+            address: address,
+          );
+          debugPrint('$_tag [STEP] User location updated successfully');
+        } catch (e) {
+          debugPrint('$_tag [WARN] Failed to update user location before errand creation: $e');
+          // proceed with errand creation even if location update fails
+        }
+      } else {
+        debugPrint('$_tag [WARN] No valid location payload to send to backend before errand creation');
+      }
+    } catch (e) {
+      debugPrint('$_tag [WARN] Could not fetch LocationController or build payload: $e');
+    }
+
+    try {
+      final result = await Get.find<ErrandService>().createErrand(
+        draft.value,
+        image: selectedImage.value,
+      );
+      final String? errandId = result['errandId']?.toString();
+      debugPrint('$_tag [STEP] ErrandService.createErrand completed. New errandId: $errandId');
+      if (errandId == null) {
+        throw Exception('No errandId returned from service');
+      }
+      return errandId;
+    } catch (e) {
+      debugPrint('$_tag [ERROR] Exception during errand creation: $e');
+      rethrow;
+    }
   }
 
   void reset() {
