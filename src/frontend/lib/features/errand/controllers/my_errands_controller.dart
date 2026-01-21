@@ -143,7 +143,12 @@ class MyErrandsController extends GetxController {
       return false;
     }
 
-    final ok = result.data?['acceptErrandOffer']?['ok'] as bool? ?? false;
+    final dynamic okRaw = result.data?['acceptErrandOffer']?['ok'];
+    final bool ok = (okRaw is bool)
+        ? okRaw
+        : (okRaw is num)
+            ? okRaw != 0
+            : (okRaw?.toString().toLowerCase() == 'true' || okRaw?.toString() == '1');
     if (ok) {
       offers.removeWhere((o) => o['offer_id'] == offerId);
     }

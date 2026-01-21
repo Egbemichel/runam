@@ -5,7 +5,6 @@ from typing import Tuple
 import base64
 from django.conf import settings
 from apps.errands.models import ErrandOffer, Errand
-import time
 from django.utils import timezone
 import logging
 from runners.services import distance_between
@@ -142,35 +141,32 @@ def notify_runner(runner, offer):
 
 
 def send_errand_offer(errand, runner, position: int = 0):
-    """Create an ErrandOffer with the given position, notify the runner
-    and wait (synchronously) for a short response window.
-    Returns True if accepted, False otherwise.
+    """Create an ErrandOffer and notify the runner, then return immediately.
+    This function no longer blocks or waits for acceptance. Frontend will poll for PENDING offers.
     """
-    offer = ErrandOffer.objects.create(
+    # Use update_or_create to avoid unique_together IntegrityError and to refresh an existing offer's TTL.
+    ttl_seconds = getattr(settings, 'ERRAND_OFFER_TTL_SECONDS', 60)
+    expires = timezone.now() + timedelta(seconds=ttl_seconds)
+
+    offer, created = ErrandOffer.objects.update_or_create(
         errand=errand,
         runner=runner,
-        position=position,
-        expires_at=timezone.now() + timedelta(seconds=15),
+        defaults={
+            'position': position,
+            'status': ErrandOffer.Status.PENDING,
+            'expires_at': expires,
+        }
     )
 
-    # 🔔 Notify runner (push / websocket later)
+    # Notify runner (noop for now) and return immediately. Frontend will poll for PENDING offers.
     notify_runner(runner, offer)
+    if created:
+        logger.info("send_errand_offer: created offer=%s for errand=%s runner=%s expires_at=%s", getattr(offer, 'id', None), getattr(errand, 'id', None), getattr(runner, 'id', None), offer.expires_at)
+    else:
+        logger.info("send_errand_offer: refreshed offer=%s for errand=%s runner=%s new_expires_at=%s", getattr(offer, 'id', None), getattr(errand, 'id', None), getattr(runner, 'id', None), offer.expires_at)
 
-    # ⏳ Wait for response
-    #Not scalable but simple for now
-    timeout = time.time() + 15
-    while time.time() < timeout:
-        offer.refresh_from_db()
-        if offer.status == ErrandOffer.Status.ACCEPTED:
-            accept_offer(errand, runner)
-            return True
-        if offer.status == ErrandOffer.Status.REJECTED:
-            return False
-        time.sleep(1)
-
-    offer.status = ErrandOffer.Status.EXPIRED
-    offer.save(update_fields=["status"])
-    return False
+    # Return immediately; do not block waiting for acceptance. Caller should not assume acceptance.
+    return offer
 
 
 def expire_errand(errand):

@@ -131,10 +131,11 @@ query MyErrands {
     expiresAt
     runnerId
     runnerName
+    runnerTrustScore
     price
     tasks {
-    description
-    price
+      description
+      price
     }
     goTo {
       address
@@ -477,7 +478,14 @@ query MyErrands {
       throw result.exception!;
     }
 
-    if (result.data?['acceptErrandOffer']['success'] != true) {
+    final dynamic successRaw = result.data?['acceptErrandOffer']?['success'];
+    final bool success = (successRaw is bool)
+        ? successRaw
+        : (successRaw is num)
+            ? successRaw != 0
+            : (successRaw?.toString().toLowerCase() == 'true' || successRaw?.toString() == '1');
+
+    if (!success) {
       throw Exception("Acceptance failed");
     }
   }
@@ -509,5 +517,72 @@ query MyErrands {
     }
 
     return result.data?["saveErrandDraft"] ?? {};
+  }
+
+  /// Fetch all errands assigned to the current runner (if backend exposes it)
+  Future<List<Errand>> fetchAssignedErrands() async {
+    final GraphQLClient client = GraphQLClientInstance.client;
+
+    // Try a list of common names the backend might expose. We will try sequentially
+    // and return on first success.
+    final candidates = <String>['myAssignedErrands', 'assignedErrands', 'myRuns'];
+
+    // GraphQL field selection used for the query body (same shape as myErrands)
+    final selection = r'''
+        id
+        type
+        speed
+        paymentMethod
+        imageUrl
+        status
+        isOpen
+        createdAt
+        expiresAt
+        runnerId
+        runnerName
+        runnerTrustScore
+        price
+        tasks { description price }
+        goTo { address latitude longitude mode }
+        returnTo { address latitude longitude mode }
+    ''';
+
+    dynamic lastException;
+    for (final fieldName in candidates) {
+      final query = """
+      query {
++        $fieldName {
++          $selection
++        }
++      }
++      """;
+
+      debugPrint('🏃 [ErrandService] Trying assigned errands query "$fieldName"');
+
+      try {
+        final result = await client.query(QueryOptions(document: gql(query), fetchPolicy: FetchPolicy.networkOnly));
+
+        if (result.hasException) {
+          debugPrint('🏃 [ErrandService] Query "$fieldName" failed: ${result.exception}');
+          lastException = result.exception;
+          // Try next candidate
+          continue;
+        }
+
+        final List<dynamic> errandsData = result.data?[fieldName] ?? [];
+        debugPrint('🏃 [ErrandService] Query "$fieldName" returned ${errandsData.length} assigned errands');
+        return errandsData.map((e) => Errand.fromJson(e as Map<String, dynamic>)).toList();
+      } catch (e) {
+        debugPrint('🏃 [ErrandService] Exception while querying "$fieldName": $e');
+        lastException = e;
+        // Try next candidate
+        continue;
+      }
+    }
+
+    // If we reach here, all attempts failed
+    final msg = 'No supported assigned-errands query found on server. Last error: $lastException';
+    debugPrint('🏃 [ErrandService] $msg');
+    throw Exception(msg);
   }
 }

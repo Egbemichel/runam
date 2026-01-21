@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:runam/features/errand/screens/errand_searching.dart';
+import 'package:runam/screens/runner/runner_request_accept.dart';
 import 'package:runam/screens/profile/profile_screen.dart';
+import 'package:get/get.dart';
+import '../controllers/runner_offer_controller.dart';
 import '../features/errand/screens/add_errand.dart';
 import '../features/errand/screens/my_errands_screen.dart';
 import '../screens/home/home_screen.dart';
@@ -14,6 +17,21 @@ final rootNavigatorKey= GlobalKey<NavigatorState>();
 final appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
   initialLocation: HomeScreen.path,
+  refreshListenable: offersRefresh,
+  redirect: (context, state) {
+    try {
+      final controller = Get.find<RunnerOfferController>();
+      debugPrint('[router] redirect evaluated; controller.hasOffers=${controller.hasOffers}');
+      if (controller.hasOffers) {
+        // avoid redirect loop when already on runner dashboard
+        if (state.name != RunnerDashboard.routeName) {
+          debugPrint('[router] redirecting to RunnerDashboard');
+          return RunnerDashboard.path;
+        }
+      }
+    } catch (_) {}
+    return null;
+  },
   routes: [
     GoRoute(
       parentNavigatorKey: rootNavigatorKey,
@@ -41,6 +59,12 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       parentNavigatorKey: rootNavigatorKey,
+      path: RunnerDashboard.path,
+      name: RunnerDashboard.routeName,
+      builder: (_, __) => const RunnerDashboard(),
+    ),
+    GoRoute(
+      parentNavigatorKey: rootNavigatorKey,
       path: AddErrandScreen.path,
       name: AddErrandScreen.routeName,
       builder: (_, __) => const AddErrandScreen(),
@@ -62,4 +86,3 @@ final appRouter = GoRouter(
     )
   ],
 );
-

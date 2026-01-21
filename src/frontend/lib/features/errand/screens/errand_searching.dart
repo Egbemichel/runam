@@ -55,6 +55,8 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
 
   // Polling state
   bool _pollingStarted = false;
+  // Controls whether we show the searching loader; hide when a runner is found
+  bool _isSearching = true;
 
   @override
   void initState() {
@@ -77,6 +79,8 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
     ever(_locationController.staticPlace, (_) => _onLocationPayloadChanged());
 
     _initializeMap();
+    // ensure default searching state
+    _isSearching = true;
   }
 
   @override
@@ -146,6 +150,12 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
 
     // Handle status changes
     if (status == 'ACCEPTED' || status == 'IN_PROGRESS') {
+      // Runner found — stop showing the searching loader and navigate
+      if (mounted) setState(() => _isSearching = false);
+      // stop internal loader animation to free resources
+      try {
+        _loaderController.stop();
+      } catch (_) {}
       _navigateToInProgress(data);
     } else if (status == 'EXPIRED') {
       _handleExpired();
@@ -188,7 +198,7 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
   void dispose() {
     _pollingSub?.cancel();
     _pollingService.dispose();
-    _loaderController.dispose();
+    try { _loaderController.dispose(); } catch (_) {}
     _sheetController.dispose();
     super.dispose();
   }
@@ -281,27 +291,20 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
           else
             const Center(child: CircularProgressIndicator()),
 
-          // 2. Pulsing Radar Effect (Added Here)
+          // 2. Shared loading animation: use CircularProgressIndicator (consistent with other screens)
           Positioned.fill(
             child: IgnorePointer(
               child: Center(
-                child: AnimatedBuilder(
-                  animation: _loaderController,
-                  builder: (context, child) {
-                    return Container(
-                      width: 300 * _loaderController.value,
-                      height: 300 * _loaderController.value,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: kPrimaryPurple.withOpacity(1 - _loaderController.value),
-                          width: 4,
+                child: _isSearching
+                    ? SizedBox(
+                        width: 80,
+                        height: 80,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 4,
+                          valueColor: AlwaysStoppedAnimation<Color>(kPrimaryPurple),
                         ),
-                        color: kPrimaryPurple.withOpacity((1 - _loaderController.value) * 0.2),
-                      ),
-                    );
-                  },
-                ),
+                      )
+                    : const SizedBox.shrink(),
               ),
             ),
           ),
@@ -383,16 +386,6 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
                       ),
                       const SizedBox(height: 40),
 
-                      // Animated Loader
-                      RotationTransition(
-                        turns: _loaderController,
-                        child: CustomPaint(
-                          size: const Size(80, 80),
-                          painter: LoaderIconPainter(color: kPrimaryPurple),
-                        ),
-                      ),
-                      const SizedBox(height: 40),
-
                       // Title
                       Text(
                         "Finding the perfect runner for you",
@@ -462,7 +455,7 @@ class AvatarPin extends StatelessWidget {
               border: Border.all(color: const Color(0xFF8B6BFF), width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
+                  color: Colors.black.withValues(alpha: 0.15),
                   blurRadius: 8,
                   offset: const Offset(0, 4),
                 ),

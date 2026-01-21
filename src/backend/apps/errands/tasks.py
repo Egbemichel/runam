@@ -1,6 +1,6 @@
 import logging
 
-from apps.errands.models import Errand
+from apps.errands.models import Errand, ErrandOffer
 from runners.services import get_nearby_runners
 from apps.errands.services import send_errand_offer, expire_errand
 
@@ -31,16 +31,26 @@ def start_errand_matching(errand_id):
         return
 
     # 2️⃣ Send offers sequentially
+    created_offers = []
     for idx, runner in enumerate(runners, start=1):
-        logger.info("start_errand_matching: sending offer to runner=%s position=%s for errand=%s", getattr(runner, 'id', None), idx, errand.id)
-        accepted = send_errand_offer(errand, runner, position=idx)
+        logger.info("start_errand_matching: creating offer for runner=%s position=%s for errand=%s", getattr(runner, 'id', None), idx, errand.id)
+        try:
+            offer = send_errand_offer(errand, runner, position=idx)
+            if offer:
+                created_offers.append((getattr(offer, 'id', None), getattr(runner, 'id', None)))
+        except Exception as e:
+            logger.exception("start_errand_matching: failed to create offer for runner=%s errand=%s: %s", getattr(runner, 'id', None), errand.id, e)
+        # continue to create offers for next runners
 
-        if accepted:
-            logger.info("start_errand_matching: runner=%s accepted errand=%s", getattr(runner, 'id', None), errand.id)
-            return  # Flow continues elsewhere
-        else:
-            logger.info("start_errand_matching: runner=%s did not accept errand=%s; continuing", getattr(runner, 'id', None), errand.id)
+    # 3️⃣ Offers created — do NOT expire the errand here. Frontend polling / runner actions
+    # will drive acceptance and eventual expiration. We keep the errand open for the offers TTL.
+    logger.info("start_errand_matching: created %s offers for errand=%s; leaving errand open for polling", len(created_offers), errand.id)
 
-    # 3️⃣ No one accepted
-    logger.info("start_errand_matching: no runners accepted errand=%s; expiring", errand.id)
-    expire_errand(errand)
+    # Extra debug: query DB for offers to ensure they persisted and log runner ids
+    try:
+        offers_qs = ErrandOffer.objects.filter(errand=errand).order_by('created_at')
+        offer_count = offers_qs.count()
+        sample = list(offers_qs.values_list('id', 'runner_id', 'status', 'expires_at')[:20])
+        logger.info("start_errand_matching: DB shows %s offers for errand=%s sample=%s", offer_count, errand.id, sample)
+    except Exception:
+        logger.exception("start_errand_matching: failed to query ErrandOffer rows for errand=%s", errand.id)

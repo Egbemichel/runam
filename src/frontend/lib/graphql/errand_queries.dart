@@ -56,3 +56,11 @@ const String acceptOfferMutation = r'''
     }
   }
 ''';
+
+const String rejectOfferMutation = r'''
+  mutation RejectOffer($offerId: ID!) {
+    rejectErrandOffer(offerId: $offerId) {
+      ok
+    }
+  }
+''';

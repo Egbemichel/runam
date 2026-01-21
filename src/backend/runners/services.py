@@ -71,6 +71,14 @@ def get_nearby_runners(errand):
         .select_related("location", "profile")
     )
 
+    # Log how many users matched the DB filter and sample ids
+    try:
+        total_candidates = runners_qs.count()
+        sample_ids = list(runners_qs.values_list('id', flat=True)[:10])
+        logger.info("get_nearby_runners: DB matched %s users with RUNNER role and location. sample_ids=%s", total_candidates, sample_ids)
+    except Exception:
+        logger.exception("get_nearby_runners: failed to inspect candidate queryset")
+
     # Prepare list with computed distances
     runners_with_distance = []
     for r in runners_qs:

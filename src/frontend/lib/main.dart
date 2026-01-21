@@ -10,6 +10,7 @@ import 'app/app.dart';
 import 'app/graphql_provider_wrapper.dart';
 import 'features/errand/controllers/errand_draft_controller.dart';
 import 'features/errand/services/errand_service.dart';
+import 'controllers/runner_offer_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,13 +19,14 @@ Future<void> main() async {
   await GetStorage.init();
   await GraphQLClientInstance.init(); // For unauthenticated requests
 
-
   // Initialize controllers as singletons
   Get.put(AuthController(), permanent: true);
   Get.put(LocationController(), permanent: true);
   Get.put(ErrandService(), permanent: true);
   Get.put(ErrandDraftController(), permanent: true);
   Get.put(ErrandController());
+  // Start session-level runner offers polling
+  Get.put(RunnerOfferController(), permanent: true);
 
   runApp(GraphQLProviderWrapper(child: const RunAmApp()));
 }

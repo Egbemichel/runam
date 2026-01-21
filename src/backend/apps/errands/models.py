@@ -85,7 +85,8 @@ class Errand(models.Model):
         return 0
 
     def total_price(self):
-        return self.errand_value() + self.service_fee() + self.distance_fee()
+        return self.quoted_total_price
+
 
 def get_errand_location_model():
     return apps.get_model('errand_location', 'ErrandLocation')
