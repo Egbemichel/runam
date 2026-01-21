@@ -4,6 +4,8 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:runam/components/switch_list_tile.dart';
 import '../../app/theme.dart';
 import '../../controllers/auth_controller.dart';
+import '../../controllers/role_controller.dart';
+import '../../services/graphql_client.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -17,6 +19,7 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   late final AuthController authController;
+  final RoleController roleController = Get.put(RoleController());
 
   @override
   void initState() {
@@ -27,10 +30,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final AuthController authController = Get.find<AuthController>();
     return Obx(() {
       bool isAuth = authController.isAuthenticated.value;
-      bool isRunner = authController.userRoles.contains('Runner');
-
+      bool isRunner = authController.userRoles.contains('RUNNER');
+      bool isRunnerActive = authController.isRunnerActive;
       return Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
@@ -51,11 +55,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             _buildAvatarSection(isAuth),
             const SizedBox(height: 20),
-            if (isAuth) _buildUserInfo(isRunner),
+            if (isAuth) _buildUserInfo(isRunnerActive),
             const SizedBox(height: 24),
             _buildLocationSection(isAuth),
             const SizedBox(height: 16),
-            _buildMenuOptions(isAuth, isRunner),
+            _buildMenuOptions(isAuth, isRunnerActive),
             const SizedBox(height: 24),
             _buildRoleFooter(isAuth, isRunner),
           ],
@@ -76,7 +80,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFF1A1A4E), width: 4),
+                border: Border.all(color: AppTheme.primary700, width: 4),
               ),
               child: Hero(
                 tag: 'ghost-avatar-hero',
@@ -94,7 +98,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFB4F4FF),
+                  color: AppTheme.secondary500,
                   borderRadius: BorderRadius.circular(15),
                   border: Border.all(color: Colors.white, width: 2),
                 ),
@@ -128,7 +132,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             Text(authController.userName, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Color(0xFF1A1A4E))),
             const SizedBox(width: 8),
-            if (isRunner) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(border: Border.all(color: Colors.green), borderRadius: BorderRadius.circular(8)), child: const Text("verified", style: TextStyle(color: Colors.green))),
+            if (isRunner) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(border: Border.all(color: AppTheme.success), borderRadius: BorderRadius.circular(8)), child: const Text("verified", style: TextStyle(color: AppTheme.success, fontSize: 12))),
             const Icon(IconsaxPlusLinear.edit, color: AppTheme.primary700, size: 20),
           ],
         ),
@@ -179,52 +183,112 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           const Text("Switch roles", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           const SizedBox(height: 12),
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeInOut,
             padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(color: const Color(0xFFF5FDFF), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFE0E0FF))),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5FDFF),
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(color: const Color(0xFFE0E0FF)),
+            ),
             child: Row(
               children: [
-                _roleBtn("Runner", true),
-                _roleBtn("Buyer", false),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => authController.switchRole("RUNNER"),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 350),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: authController.isRunnerActive == true ? const Color(0xFFE0E0FF) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Center(
+                        child: Text(
+                          "Runner",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: authController.isRunnerActive == true ? const Color(0xFF8B5CF6) : const Color(0xFF1A1A4E),
+                            fontFamily: authController.activeRole.value == UserRole.RUNNER ? 'Grandstander' : null,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => authController.switchRole("BUYER"),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 350),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: authController.isBuyerActive == true ? const Color(0xFFE0E0FF) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Center(
+                        child: Text(
+                          "Buyer",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: authController.isBuyerActive == true ? const Color(0xFF8B5CF6) : const Color(0xFF1A1A4E),
+                            fontFamily: authController.activeRole.value == UserRole.BUYER ? 'Grandstander' : null,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
           const SizedBox(height: 10),
-          const Center(child: Text("No errands to post? Go run some!", style: TextStyle(color: Colors.grey))),
+          Center(
+            child: Text(
+              authController.isRunnerActive == false
+                  ? "No errands to post? Go run some!"
+                  : "Exhausted? Let someone else do the work!",
+              style: const TextStyle(color: Colors.grey),
+            ),
+          ),
         ],
       );
     }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(color: const Color(0xFFF5FDFF), borderRadius: BorderRadius.circular(12)),
-      child: const Row(
-        children: [
-          Icon(Icons.directions_run, color: AppTheme.primary700),
-          SizedBox(width: 12),
-          Text("Earn as a runner", style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primary700)),
-          Spacer(),
-          Icon(Icons.arrow_forward_ios, size: 16, color: AppTheme.primary700),
-        ],
-      ),
-    );
-  }
+    return GestureDetector(
+      onTap: () async {
+        final client = GraphQLClientInstance.client;
 
-  Widget _roleBtn(String label, bool active) {
-    return Expanded(
+        try {
+          await authController.becomeRunner(client);
+        } catch (_) {
+          Get.snackbar("Error", "Could not become runner");
+        }
+      },
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: active ? const Color(0xFFE0E0FF) : Colors.transparent,
+          color: const Color(0xFFF5FDFF),
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Center(
-          child: Text(label, style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: active ? const Color(0xFF8B5CF6) : const Color(0xFF1A1A4E),
-            fontFamily: active ? 'Grandstander' : null,
-          )),
+        child: const Row(
+          children: [
+            Icon(Icons.directions_run, color: AppTheme.primary700),
+            SizedBox(width: 12),
+            Text(
+              "Earn as a runner",
+              style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primary700),
+            ),
+            Spacer(),
+            Icon(Icons.arrow_forward_ios, size: 16, color: AppTheme.primary700),
+          ],
         ),
       ),
     );
+
   }
+
+
 }

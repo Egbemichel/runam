@@ -2,7 +2,8 @@ import os
 import uuid
 
 import graphene
-from django.conf import settings
+
+from core import settings
 from graphene_file_upload.scalars import Upload
 from graphql import GraphQLError
 

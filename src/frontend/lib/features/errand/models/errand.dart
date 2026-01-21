@@ -95,6 +95,7 @@ class Errand {
   final String? runnerId;
   final String? runnerName;
   final double? price;
+  final double runnerScore;
 
   Errand({
     required this.id,
@@ -112,6 +113,7 @@ class Errand {
     this.runnerId,
     this.runnerName,
     this.price,
+    this.runnerScore = 0.0,
   });
 
   /// Check if the errand has expired based on current time
@@ -124,8 +126,8 @@ class Errand {
   }
 
 
-  /// Runner score (optional, default 0)
-  double get runnerScore => 0.0; // replace with real data if available
+  /// Runner score (0.0 if not available)
+  double get runnerScoreValue => runnerScore; // use runnerScoreValue to avoid name collision
 
   /// Time taken to complete the errand (optional, default 0)
   int get timeTaken {
@@ -170,6 +172,23 @@ class Errand {
     // helper to safely get a string value
     String safeString(dynamic v) => v == null ? '' : v.toString();
 
+    // helper to safely parse booleans from various shapes (bool, String, num)
+    bool parseBool(dynamic v) {
+      if (v == null) return false;
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      final s = v.toString().toLowerCase();
+      return s == 'true' || s == '1' || s == 'yes' || s == 'y';
+    }
+
+    // helper to parse doubles from num or string
+    double? parseNullableDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      final parsed = double.tryParse(v.toString());
+      return parsed;
+    }
+
     // parse tasks
     final tasksList = (json['tasks'] as List<dynamic>?) ?? (json['task_list'] as List<dynamic>?) ?? [];
 
@@ -185,12 +204,13 @@ class Errand {
           : null,
       imageUrl: json['imageUrl'] ?? json['image_url'],
       status: ErrandStatusExtension.fromString(safeString(json['status'])),
-      isOpen: json['isOpen'] ?? json['is_open'] ?? false,
+      isOpen: parseBool(json['isOpen'] ?? json['is_open']),
       createdAt: DateTime.tryParse(safeString(json['createdAt'] ?? json['created_at'])) ?? DateTime.now(),
       expiresAt: DateTime.tryParse(safeString(json['expiresAt'] ?? json['expires_at'])) ?? DateTime.now(),
-      runnerId: json['runnerId'] ?? json['runner_id'] != null ? safeString(json['runnerId'] ?? json['runner_id']) : null,
-      runnerName: json['runnerName'] ?? json['runner_name'] != null ? safeString(json['runnerName'] ?? json['runner_name']) : null,
-      price: json['price'] != null ? (json['price'] as num).toDouble() : null,
+      runnerId: (json['runnerId'] ?? json['runner_id']) != null ? safeString(json['runnerId'] ?? json['runner_id']) : null,
+      runnerName: (json['runnerName'] ?? json['runner_name']) != null ? safeString(json['runnerName'] ?? json['runner_name']) : null,
+      price: parseNullableDouble(json['price']),
+      runnerScore: parseNullableDouble(json['runnerTrustScore'] ?? json['trustScore'] ?? json['runner_trust_score'] ?? json['runner_trust'] ?? json['runner']?['trustScore'] ?? json['runner']?['trust_score']) ?? 0.0,
     );
   }
 
@@ -255,6 +275,7 @@ class Errand {
     'runner_id': runnerId,
     'runner_name': runnerName,
     'price': price,
+    'runner_score': runnerScore,
   };
 
   Errand copyWith({
@@ -273,6 +294,7 @@ class Errand {
     String? runnerId,
     String? runnerName,
     double? price,
+    double? runnerScore,
   }) {
     return Errand(
       id: id ?? this.id,
@@ -290,6 +312,7 @@ class Errand {
       runnerId: runnerId ?? this.runnerId,
       runnerName: runnerName ?? this.runnerName,
       price: price ?? this.price,
+      runnerScore: runnerScore ?? this.runnerScore,
     );
   }
 }

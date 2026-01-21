@@ -6,9 +6,17 @@ from django.apps import apps
 User = get_user_model()
 
 class Errand(models.Model):
+    quoted_distance_fee = models.PositiveIntegerField(default=0)
+    quoted_service_fee = models.PositiveIntegerField(default=0)
+    quoted_total_price = models.PositiveIntegerField(default=0)
+
     class Type(models.TextChoices):
         ONE_WAY = "ONE_WAY"
         ROUND_TRIP = "ROUND_TRIP"
+
+    class PaymentMethod(models.TextChoices):
+        CASH = "CASH"
+        ONLINE = "ONLINE"
 
     class Status(models.TextChoices):
         PENDING = "PENDING" # open, searching for runners
@@ -20,7 +28,10 @@ class Errand(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     type = models.CharField(max_length=20, choices=Type.choices)
     speed = models.CharField(max_length=10)
-    payment_method = models.CharField(max_length=20)
+    payment_method = models.CharField(
+        max_length=20,
+        choices=PaymentMethod.choices
+    )
     go_to = models.ForeignKey(
         'errand_location.ErrandLocation',
         null=True,
@@ -46,6 +57,15 @@ class Errand(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    runner = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        related_name="accepted_errands",
+        on_delete=models.SET_NULL
+    )
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
     def refresh_open_state(self):
         """Toggle is_open and status to EXPIRED if past expires_at and not terminal."""
         if self.expires_at and self.status not in [self.Status.COMPLETED, self.Status.CANCELLED, self.Status.EXPIRED]:
@@ -65,10 +85,46 @@ class Errand(models.Model):
         return 0
 
     def total_price(self):
-        return self.errand_value() + self.service_fee() + self.distance_fee()
+        return self.quoted_total_price
+
 
 def get_errand_location_model():
     return apps.get_model('errand_location', 'ErrandLocation')
+
+
+class ErrandOffer(models.Model):
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        REJECTED = "REJECTED", "Rejected"
+        EXPIRED = "EXPIRED", "Expired"
+
+    errand = models.ForeignKey(
+        Errand,
+        on_delete=models.CASCADE,
+        related_name="offers"
+    )
+    runner = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    position = models.PositiveIntegerField(help_text="Order of offer")
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+
+    expires_at = models.DateTimeField()
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("errand", "runner")
+        ordering = ["position"]
+
+
 
 class ErrandTask(models.Model):
     errand = models.ForeignKey(
