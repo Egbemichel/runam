@@ -57,7 +57,8 @@ def get_or_create_google_user(payload: dict) -> User:
 
     # Ensure profile exists and update extras
     profile, _ = UserProfile.objects.get_or_create(user=user)
-    if picture and not profile.avatar:
+    # If Google provided a picture URL, update the stored avatar to keep it fresh
+    if picture:
         profile.avatar = picture
     if profile.trust_score is None:
         profile.trust_score = 60

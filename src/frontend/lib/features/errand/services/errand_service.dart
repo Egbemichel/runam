@@ -17,6 +17,7 @@ import '../models/errand_draft.dart';
 
 class ErrandService {
   static const String _tag = '🏃 [ErrandService]';
+  final GraphQLClient client = GraphQLClientInstance.client;
   final _storage = GetStorage();
 
   /// Creates an errand with optional image upload
@@ -448,48 +449,31 @@ query MyErrands {
       throw result.exception!;
     }
 
-    return result.data!['errand'];
-  }
-
-  Future<void> acceptErrandOffer(
-      GraphQLClient client,
-      String offerId,
-      ) async {
-    const mutation = r'''
-      mutation AcceptErrandOffer(
-        $offerId: ID!
-      ) {
-        acceptErrandOffer(offerId: $offerId) {
-          success
-          message
-        }
-      }
-    ''';
-    final result = await client.mutate(
-      MutationOptions(
-        document: gql(mutation),
-        variables: {
-          'offerId': offerId,
-        },
-      ),
-    );
-
-    if (result.hasException) {
-      throw result.exception!;
+    // The backend returns the field under the name `errandStatus` (see graphql/errand_queries.dart).
+    // Older code expected `errand` which is incorrect for this query and produced a null.
+    // Return a Map and guard against nulls to avoid the Flutter type error.
+    final data = result.data;
+    if (data == null) {
+      throw Exception('Empty GraphQL response for errand status');
     }
 
-    final dynamic successRaw = result.data?['acceptErrandOffer']?['success'];
-    final bool success = (successRaw is bool)
-        ? successRaw
-        : (successRaw is num)
-            ? successRaw != 0
-            : (successRaw?.toString().toLowerCase() == 'true' || successRaw?.toString() == '1');
+    final dynamic statusPayload = data['errandStatus'] ?? data['errand']; // fallback for compatibility
+    if (statusPayload == null) {
+      throw Exception('No errand status returned from server');
+    }
 
-    if (!success) {
-      throw Exception("Acceptance failed");
+    // Ensure the returned value is a Map<String, dynamic>
+    if (statusPayload is Map<String, dynamic>) {
+      return statusPayload;
+    }
+
+    // If GraphQL client returns LinkedHashMap or other map-like structure, convert it
+    try {
+      return Map<String, dynamic>.from(statusPayload as Map);
+    } catch (e) {
+      throw Exception('Unexpected errand status payload shape: $e');
     }
   }
-
 
 
   Future<Map<String, dynamic>> saveErrandDraft(Map<String, dynamic> draftJson) async {
@@ -519,70 +503,86 @@ query MyErrands {
     return result.data?["saveErrandDraft"] ?? {};
   }
 
-  /// Fetch all errands assigned to the current runner (if backend exposes it)
+  /// Fetch all errands assigned to the current runner using a backend mutation
+  /// The backend exposes `FetchAssignedErrands` (Graphene) which appears in schema
+  /// as `fetchAssignedErrands` and returns { errands, success, message }.
   Future<List<Errand>> fetchAssignedErrands() async {
-    final GraphQLClient client = GraphQLClientInstance.client;
+    try {
+      // Use your static client instance to avoid Get.find errors
+      final client = GraphQLClientInstance.client;
 
-    // Try a list of common names the backend might expose. We will try sequentially
-    // and return on first success.
-    final candidates = <String>['myAssignedErrands', 'assignedErrands', 'myRuns'];
-
-    // GraphQL field selection used for the query body (same shape as myErrands)
-    final selection = r'''
-        id
-        type
-        speed
-        paymentMethod
-        imageUrl
-        status
-        isOpen
-        createdAt
-        expiresAt
-        runnerId
-        runnerName
-        runnerTrustScore
-        price
-        tasks { description price }
-        goTo { address latitude longitude mode }
-        returnTo { address latitude longitude mode }
-    ''';
-
-    dynamic lastException;
-    for (final fieldName in candidates) {
-      final query = """
-      query {
-+        $fieldName {
-+          $selection
-+        }
-+      }
-+      """;
-
-      debugPrint('🏃 [ErrandService] Trying assigned errands query "$fieldName"');
-
-      try {
-        final result = await client.query(QueryOptions(document: gql(query), fetchPolicy: FetchPolicy.networkOnly));
-
-        if (result.hasException) {
-          debugPrint('🏃 [ErrandService] Query "$fieldName" failed: ${result.exception}');
-          lastException = result.exception;
-          // Try next candidate
-          continue;
+      const String query = r'''
+        mutation FetchAssignedErrands {
+          fetchAssignedErrands {
+            success
+            message
+            errands {
+              id
+              type
+              speed
+              paymentMethod
+              price
+              status
+              isOpen
+              createdAt
+              expiresAt
+              userId
+              userName
+              userTrustScore
+              runnerId
+              runnerName
+              runnerTrustScore
+              tasks {
+                 id
+                 description
+                 price
+              }
+              goTo {
+              mode
+              latitude
+              longitude
+              address
+            }
+            # FIX: Added sub-fields for returnTo
+            returnTo {
+              mode
+              latitude
+              longitude
+              address
+            }
+            }
+          }
         }
+      ''';
 
-        final List<dynamic> errandsData = result.data?[fieldName] ?? [];
-        debugPrint('🏃 [ErrandService] Query "$fieldName" returned ${errandsData.length} assigned errands');
-        return errandsData.map((e) => Errand.fromJson(e as Map<String, dynamic>)).toList();
-      } catch (e) {
-        debugPrint('🏃 [ErrandService] Exception while querying "$fieldName": $e');
-        lastException = e;
-        // Try next candidate
-        continue;
+      final result = await client.mutate(MutationOptions(
+        document: gql(query),
+        fetchPolicy: FetchPolicy.networkOnly,
+      ));
+
+      if (result.hasException) {
+        debugPrint('[ErrandService] GraphQL Exception: ${result.exception.toString()}');
+        throw Exception("Network or Syntax Error: ${result.exception.toString()}");
       }
-    }
 
-    // If we reach here, all attempts failed
-    final msg = 'No supported assigned-errands query found on server. Last error: $lastException';
-    debugPrint('🏃 [ErrandService] $msg');
-    throw Exception(msg);
+      final data = result.data?['fetchAssignedErrands'];
+
+      if (data == null) {
+        throw Exception("Server returned null data");
+      }
+
+      if (data['success'] == false) {
+        debugPrint('[ErrandService] Backend Error Message: ${data['message']}');
+        throw Exception(data['message'] ?? "Failed to fetch errands");
+      }
+
+      final List<dynamic> list = data['errands'] ?? [];
+      return list.map((json) => Errand.fromJson(json)).toList();
+
+    } catch (e) {
+      debugPrint('[ErrandService] Catch error: $e');
+      rethrow; // Pass error back to the FutureBuilder
+    }
   }
+ // This needs work
 }
