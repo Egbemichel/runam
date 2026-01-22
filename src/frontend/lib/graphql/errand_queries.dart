@@ -65,6 +65,9 @@ const String acceptOfferMutation = r'''
           price
         }
       }
+      totalPrice
+      buyerTrustScore
+      runnerTrustScore
     }
   }
 ''';
