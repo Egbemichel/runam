@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:geolocator/geolocator.dart';
@@ -6,8 +7,11 @@ import '../../../models/place_models.dart';
 import '../../../controllers/location_controller.dart';
 import '../../../services/auth_service.dart';
 import '../models/errand_draft.dart';
+import '../screens/errand_in_progress.dart';
 import '../services/errand_service.dart';
 import '../models/errand.dart';
+import '../../../services/graphql_client.dart';
+import '../screens/errand_searching.dart';
 
 class ErrandController extends GetxController {
   static const String _tag = '📦 [ErrandController]';
@@ -17,6 +21,9 @@ class ErrandController extends GetxController {
 
   // List of errands
   var errands = <Errand>[].obs;
+  Timer? _statusPollTimer;
+  final Set<String> _navigatedErrandIds = {};
+
   // Loading state
   var isLoading = false.obs;
 
@@ -41,6 +48,14 @@ class ErrandController extends GetxController {
       debugPrint('$_tag Image ${img != null ? "selected" : "cleared"}: ${img?.path}');
     });
     fetchMyErrands();
+  }
+
+  @override
+  void onClose() {
+    try {
+      _statusPollTimer?.cancel();
+    } catch (_) {}
+    super.onClose();
   }
 
   void setType(String type) {
@@ -194,13 +209,79 @@ class ErrandController extends GetxController {
 
       // Update the observable list
       errands.value = fetchedErrands;
-
+      // Ensure we start status polling for buyers who are waiting for acceptance
+      _ensureStatusPolling();
     } catch (e) {
       debugPrint('$_tag ❌ Failed to fetch errands: $e');
       errands.clear(); // clear previous errands on error
     } finally {
       isLoading.value = false;
       debugPrint('$_tag === FETCH MY ERRANDS: Finished ===');
+    }
+  }
+
+  void _ensureStatusPolling() {
+    // If there are any pending/open errands, start a periodic status poll
+    final pending = errands.where((e) => e.isOpen == true).toList();
+    if (pending.isEmpty) {
+      // nothing to poll; cancel timer if running
+      try {
+        _statusPollTimer?.cancel();
+        _statusPollTimer = null;
+      } catch (_) {}
+      return;
+    }
+
+    // If timer already running, keep it
+    if (_statusPollTimer != null && _statusPollTimer!.isActive) return;
+
+    debugPrint('$_tag Starting status poller for ${pending.length} pending errands');
+    _statusPollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _checkPendingErrandsStatus());
+    // Run an immediate check as well
+    _checkPendingErrandsStatus();
+  }
+
+  Future<void> _checkPendingErrandsStatus() async {
+    if (errands.isEmpty) return;
+    final service = Get.find<ErrandService>();
+    final client = GraphQLClientInstance.client;
+
+    for (final e in errands.where((ev) => ev.isOpen == true)) {
+      final id = e.id;
+      if (_navigatedErrandIds.contains(id)) continue; // already handled
+
+      try {
+        final Map<String, dynamic> statusMap = await service.fetchErrandStatus(client, id);
+        final String status = (statusMap['status'] ?? '').toString().toUpperCase();
+        debugPrint('$_tag Status check for errand $id: $status');
+        // Only navigate buyer when the errand reaches IN_PROGRESS (runner accepted and errand started)
+        if (status == 'IN_PROGRESS') {
+          // mark navigated and navigate buyer to in-progress screen
+          _navigatedErrandIds.add(id);
+          try {
+            // Stop polling temporarily to avoid repeated navigations
+            _statusPollTimer?.cancel();
+            _statusPollTimer = null;
+          } catch (_) {}
+
+          // Build a minimal payload to send to ErrandInProgressScreen
+          final payload = e.toJson();
+          payload['status'] = status;
+
+          // Use Get navigation to replace routes and navigate buyer to in-progress screen
+          try {
+            Get.offAll(() => ErrandInProgressScreen(errand: payload));
+          } catch (navErr) {
+            debugPrint('$_tag Failed to navigate to ErrandInProgressScreen with Get: $navErr');
+          }
+
+          // No need to check other errands in this tick; break to avoid overlapping navigation
+          break;
+        }
+      } catch (err) {
+        debugPrint('$_tag Error while checking status for errand $id: $err');
+        // continue to next errand
+      }
     }
   }
 }

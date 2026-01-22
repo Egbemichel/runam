@@ -96,6 +96,13 @@ class Errand {
   final String? runnerName;
   final double? price;
   final double runnerScore;
+  // --- Added for backend parity ---
+  final String? userId;
+  final String? userName;
+  final double? userTrustScore;
+  final int? quotedDistanceFee;
+  final int? quotedServiceFee;
+  final int? quotedTotalPrice;
 
   Errand({
     required this.id,
@@ -114,6 +121,13 @@ class Errand {
     this.runnerName,
     this.price,
     this.runnerScore = 0.0,
+    // --- Added for backend parity ---
+    this.userId,
+    this.userName,
+    this.userTrustScore,
+    this.quotedDistanceFee,
+    this.quotedServiceFee,
+    this.quotedTotalPrice,
   });
 
   /// Check if the errand has expired based on current time
@@ -192,6 +206,19 @@ class Errand {
     // parse tasks
     final tasksList = (json['tasks'] as List<dynamic>?) ?? (json['task_list'] as List<dynamic>?) ?? [];
 
+    // --- Added for backend parity ---
+    String? userId = json['userId']?.toString() ?? json['user_id']?.toString();
+    String? userName = json['userName'] ?? json['user_name'];
+    double? userTrustScore;
+    if (json['userTrustScore'] != null) {
+      userTrustScore = double.tryParse(json['userTrustScore'].toString());
+    } else if (json['user_trust_score'] != null) {
+      userTrustScore = double.tryParse(json['user_trust_score'].toString());
+    }
+    int? quotedDistanceFee = json['quotedDistanceFee'] ?? json['quoted_distance_fee'];
+    int? quotedServiceFee = json['quotedServiceFee'] ?? json['quoted_service_fee'];
+    int? quotedTotalPrice = json['quotedTotalPrice'] ?? json['quoted_total_price'];
+
     return Errand(
       id: safeString(json['id']),
       type: safeString(json['type']),
@@ -211,6 +238,13 @@ class Errand {
       runnerName: (json['runnerName'] ?? json['runner_name']) != null ? safeString(json['runnerName'] ?? json['runner_name']) : null,
       price: parseNullableDouble(json['price']),
       runnerScore: parseNullableDouble(json['runnerTrustScore'] ?? json['trustScore'] ?? json['runner_trust_score'] ?? json['runner_trust'] ?? json['runner']?['trustScore'] ?? json['runner']?['trust_score']) ?? 0.0,
+      // --- Added for backend parity ---
+      userId: userId,
+      userName: userName,
+      userTrustScore: userTrustScore,
+      quotedDistanceFee: quotedDistanceFee,
+      quotedServiceFee: quotedServiceFee,
+      quotedTotalPrice: quotedTotalPrice,
     );
   }
 
@@ -276,6 +310,13 @@ class Errand {
     'runner_name': runnerName,
     'price': price,
     'runner_score': runnerScore,
+    // --- Added for backend parity ---
+    'user_id': userId,
+    'user_name': userName,
+    'user_trust_score': userTrustScore,
+    'quoted_distance_fee': quotedDistanceFee,
+    'quoted_service_fee': quotedServiceFee,
+    'quoted_total_price': quotedTotalPrice,
   };
 
   Errand copyWith({
@@ -295,6 +336,13 @@ class Errand {
     String? runnerName,
     double? price,
     double? runnerScore,
+    // --- Added for backend parity ---
+    String? userId,
+    String? userName,
+    double? userTrustScore,
+    int? quotedDistanceFee,
+    int? quotedServiceFee,
+    int? quotedTotalPrice,
   }) {
     return Errand(
       id: id ?? this.id,
@@ -313,6 +361,13 @@ class Errand {
       runnerName: runnerName ?? this.runnerName,
       price: price ?? this.price,
       runnerScore: runnerScore ?? this.runnerScore,
+      // --- Added for backend parity ---
+      userId: userId ?? this.userId,
+      userName: userName ?? this.userName,
+      userTrustScore: userTrustScore ?? this.userTrustScore,
+      quotedDistanceFee: quotedDistanceFee ?? this.quotedDistanceFee,
+      quotedServiceFee: quotedServiceFee ?? this.quotedServiceFee,
+      quotedTotalPrice: quotedTotalPrice ?? this.quotedTotalPrice,
     );
   }
 }

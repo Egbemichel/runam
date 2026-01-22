@@ -1,55 +1,20 @@
-// File: lib/features/runner/screens/runner_dashboard.dart
+// File: lib/screens/runner/runner_request_accept.dart
 
 import 'dart:async';
 import 'dart:ui';
+import 'package:dotted_border/dotted_border.dart';
 import 'package:flutter/material.dart';
-import 'package:get/get_core/src/get_main.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
 import 'package:get/get.dart';
-import 'package:runam/features/errand/screens/errand_searching.dart'; // Ensure this import exists or remove if unused
+import 'package:iconsax_plus/iconsax_plus.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
+import '../../features/errand/screens/errand_in_progress.dart';
+import '../home/home_screen.dart';
+import '../../controllers/location_controller.dart';
 import '../../components/runam_slider.dart';
 import '../../controllers/runner_offer_controller.dart';
 import '../../../app/theme.dart';
 import '../../../graphql/errand_queries.dart';
-
-// Helper for dashed border
-class DashedBorderPainter extends CustomPainter {
-  final Color color;
-  final double strokeWidth;
-  final double gap;
-
-  DashedBorderPainter({this.color = Colors.black, this.strokeWidth = 1.0, this.gap = 5.0});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = color
-      ..strokeWidth = strokeWidth
-      ..style = PaintingStyle.stroke;
-
-    final Path path = Path();
-    path.addRRect(RRect.fromRectAndRadius(
-        Rect.fromLTWH(0, 0, size.width, size.height), const Radius.circular(15)));
-
-    Path dashPath = Path();
-    double dashWidth = 10.0;
-    double distance = 0.0;
-
-    for (PathMetric pathMetric in path.computeMetrics()) {
-      while (distance < pathMetric.length) {
-        dashPath.addPath(
-          pathMetric.extractPath(distance, distance + dashWidth),
-          Offset.zero,
-        );
-        distance += dashWidth + gap;
-      }
-    }
-    canvas.drawPath(dashPath, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
 
 class RunnerDashboard extends StatefulWidget {
   const RunnerDashboard({super.key});
@@ -65,53 +30,53 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
   List<Map<String, dynamic>> _pendingOffers = [];
   bool _isAccepting = false;
   bool _pollingStarted = false;
-  String? _navigatedOfferId;
   StreamSubscription? _offersSub;
-
-  // Colors extracted from the design image
-  final Color _bgCyan = const Color(0xFFA0F1FF); // Light blue/cyan bg
-  final Color _purpleMain = const Color(0xFF8B7EF8); // Purple button/accents
-  final Color _darkText = const Color(0xFF1A1A40); // Dark text
-  final Color _cardBorder = const Color(0xFF6A5ACD); // Task border
+  mapbox.CameraOptions? _cameraOptions;
+  mapbox.MapboxMap? mapboxMap;
+  final DraggableScrollableController _sheetController = DraggableScrollableController();
+  bool _isFollowingUser = true;
+  late final LocationController _locationController;
 
   @override
   void initState() {
     super.initState();
+    try {
+      _locationController = Get.find<LocationController>();
+      final payload = _locationController.toPayload();
+      if (payload.isNotEmpty) {
+        final lat = (payload['latitude'] as num).toDouble();
+        final lng = (payload['longitude'] as num).toDouble();
+        _cameraOptions = mapbox.CameraOptions(
+          center: mapbox.Point(coordinates: mapbox.Position(lng, lat)),
+          zoom: 15.0,
+        );
+      }
+      ever(_locationController.locationMode, (_) => _onLocationPayloadChanged());
+      ever(_locationController.currentPosition, (_) => _onLocationPayloadChanged());
+      ever(_locationController.staticPlace, (_) => _onLocationPayloadChanged());
+    } catch (_) {}
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-
     if (!_pollingStarted) {
       final controller = Get.find<RunnerOfferController>();
-      debugPrint('[RunnerDashboard] Subscribing to session-level offers stream...');
       _offersSub = controller.offers.listen((offers) {
         final now = DateTime.now().toUtc();
         final filtered = offers.where((offer) {
           try {
             if (offer['expiresAt'] != null) {
-              final String ts = offer['expiresAt'].toString();
-              final dt = DateTime.parse(ts).toUtc();
+              final dt = DateTime.parse(offer['expiresAt'].toString()).toUtc();
               if (dt.isBefore(now)) return false;
             }
-            if (offer['expiresIn'] != null) {
-              final num v = offer['expiresIn'] is num
-                  ? offer['expiresIn'] as num
-                  : num.parse(offer['expiresIn'].toString());
-              if (v <= 0) return false;
-            }
           } catch (e) {
-            debugPrint('[RunnerDashboard] Expiry parse error: $e');
+            debugPrint(e.toString());
           }
           return true;
         }).toList();
 
-        if (mounted) {
-          setState(() {
-            _pendingOffers = filtered;
-          });
-        }
+        if (mounted) setState(() => _pendingOffers = filtered);
       });
       _pollingStarted = true;
     }
@@ -120,7 +85,51 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
   @override
   void dispose() {
     _offersSub?.cancel();
+    _sheetController.dispose();
     super.dispose();
+  }
+
+  // --- Logic Helpers ---
+  String safeString(dynamic v, [String fallback = '']) => v?.toString() ?? fallback;
+  double safeDouble(dynamic v, [double fallback = 0.0]) {
+    if (v == null) return fallback;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? fallback;
+  }
+
+  Color _withOpacity(Color c, double opacity) {
+    final alpha = (opacity * 255).clamp(0, 255).round();
+    return c.withAlpha(alpha);
+  }
+
+  double _computeTotalPrice(Map<String, dynamic>? offer, List<dynamic> tasks) {
+    final p = offer != null ? offer['price'] : null;
+    final offerPrice = safeDouble(p, double.nan);
+    if (!offerPrice.isNaN && offerPrice > 0) return offerPrice;
+
+    double sum = 0;
+    for (final t in tasks) {
+      sum += safeDouble(t is Map ? t['price'] : t);
+    }
+    return sum;
+  }
+
+  String _computeExpiresIn(Map<String, dynamic>? offer) {
+    try {
+      final expiresAt = offer?['expiresAt'] ?? offer?['expires_at'] ?? offer?['expiresIn'];
+      if (expiresAt == null) return safeString(offer?['expiresIn'] ?? 'Soon');
+      if (expiresAt is String && !expiresAt.contains(RegExp(r'\d{4}-\d{2}-\d{2}'))) {
+        return expiresAt;
+      }
+      final dt = DateTime.parse(expiresAt.toString()).toUtc();
+      final diff = dt.difference(DateTime.now().toUtc());
+      if (diff.inMinutes <= 0) return 'Now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}mins';
+      if (diff.inHours < 24) return '${diff.inHours}h ${diff.inMinutes % 60}m';
+      return '${diff.inDays}d';
+    } catch (_) {
+      return safeString(offer?['expiresIn'] ?? 'Soon');
+    }
   }
 
   Future<void> _acceptOffer(String offerId) async {
@@ -129,402 +138,135 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
 
     try {
       final client = GraphQLProvider.of(context).value;
-      final MutationOptions options = MutationOptions(
+      final QueryResult result = await client.mutate(MutationOptions(
         document: gql(acceptOfferMutation),
         variables: {'offerId': offerId},
-      );
+        fetchPolicy: FetchPolicy.networkOnly,
+      ));
 
-      final QueryResult result = await client.mutate(options);
+      if (result.hasException) {
+        final errors = result.exception?.graphqlErrors ?? [];
+        final message = errors.isNotEmpty ? errors.first.message : "Connection error";
+        if (message.toLowerCase().contains('expired')) {
+          _handleExit(message, isWarning: true);
+          return;
+        }
+        throw Exception(message);
+      }
 
-      if (result.hasException) throw Exception(result.exception.toString());
-      final dynamic successRaw = result.data?['acceptErrandOffer']?['ok'];
-      final bool success = (successRaw is bool)
-          ? successRaw
-          : (successRaw is num)
-              ? successRaw != 0
-              : (successRaw?.toString().toLowerCase() == 'true' || successRaw?.toString() == '1');
+      final data = result.data?['acceptErrandOffer'];
+      final bool ok = data?['ok'] == true;
 
-      if (success == true) {
-        final sessionController = Get.find<RunnerOfferController>();
-        await sessionController.stopPolling();
-        await _offersSub?.cancel();
+      if (ok) {
+        Get.find<RunnerOfferController>().stopPolling();
+        _offersSub?.cancel();
 
-        final accepted = _pendingOffers.firstWhere(
-                (o) => o['id'].toString() == offerId.toString(),
-            orElse: () => {});
-        final errandPayload = (accepted is Map && accepted.containsKey('errand'))
-            ? accepted['errand'] as Map<String, dynamic>
-            : {'status': 'IN_PROGRESS'};
+        final Map<String, dynamic> officialErrand = data['errand'] ?? {};
 
         if (mounted) {
-          setState(() {
-            _pendingOffers.removeWhere((o) => o['id'].toString() == offerId.toString());
-            _navigatedOfferId = offerId;
-          });
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Offer accepted!'), backgroundColor: Colors.green),
+              const SnackBar(content: Text('Offer accepted!'), backgroundColor: Colors.green)
           );
 
-          if (_navigatedOfferId == null) {
-            _navigatedOfferId = offerId;
-            // Assuming ErrandInProgressScreen exists in your project
-            // Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ErrandInProgressScreen(errand: errandPayload)));
-          }
+          // Use Get.off to avoid Navigator 2.0 imperative API conflicts
+          Future.delayed(const Duration(milliseconds: 100), () {
+            Get.off(() => ErrandInProgressScreen(errand: officialErrand));
+          });
         }
+      } else {
+        throw Exception('This offer is no longer available.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.toString().replaceAll('Exception:', '')), backgroundColor: Colors.red)
+        );
       }
     } finally {
       if (mounted) setState(() => _isAccepting = false);
     }
   }
 
-  Future<void> _declineOffer(String offerId) async {
-    debugPrint('[RunnerDashboard] Declining offer $offerId -> calling reject mutation');
+  void _handleExit(String message, {bool isWarning = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: isWarning ? Colors.orange : Colors.red)
+    );
+    Get.offAll(() => const HomeScreen());
+  }
 
+  Future<void> _declineOffer(String offerId) async {
     try {
       final client = GraphQLProvider.of(context).value;
-
-      final MutationOptions options = MutationOptions(
+      final QueryResult result = await client.mutate(MutationOptions(
         document: gql(rejectOfferMutation),
         variables: {'offerId': offerId},
-      );
-
-      final QueryResult result = await client.mutate(options);
+        fetchPolicy: FetchPolicy.networkOnly,
+      ));
 
       if (result.hasException) {
-        throw Exception(result.exception.toString());
+        final msg = result.exception?.graphqlErrors.map((e) => e.message).join(', ') ?? result.exception.toString();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $msg'), backgroundColor: Colors.red));
+        }
+        return;
       }
 
-      final dynamic successRejectRaw = result.data?['rejectErrandOffer']?['ok'];
-      final bool successReject = (successRejectRaw is bool)
-          ? successRejectRaw
-          : (successRejectRaw is num)
-              ? successRejectRaw != 0
-              : (successRejectRaw?.toString().toLowerCase() == 'true' || successRejectRaw?.toString() == '1');
+      final dynamic data = result.data?['rejectErrandOffer'];
+      final bool ok = data?['ok'] == true || data?['ok'] == 1;
 
-      if (successReject == true) {
-        debugPrint('[RunnerDashboard] Offer $offerId successfully rejected on server');
+      if (ok) {
         if (mounted) {
           setState(() {
             _pendingOffers.removeWhere((o) => o['id'].toString() == offerId.toString());
           });
-
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Offer declined'), backgroundColor: Colors.orange),
+              const SnackBar(content: Text('Offer declined'), backgroundColor: Colors.orange)
           );
-        }
-      } else {
-        debugPrint('[RunnerDashboard] Server responded with ok=false for reject');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not decline offer'), backgroundColor: Colors.red),
-          );
+          Get.offAll(() => const HomeScreen());
         }
       }
     } catch (e) {
-      debugPrint('[RunnerDashboard] Decline error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red),
-        );
-      }
+      debugPrint("Decline Error: $e");
     }
+  }
+
+  Future<void> _onLocationPayloadChanged() async {
+    if (!mounted) return;
+    final payload = _locationController.toPayload();
+    if (payload.isEmpty) return;
+    if (_isFollowingUser) setState(() => _isFollowingUser = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    // If we have offers, show the first one. Otherwise show waiting state.
     final currentOffer = _pendingOffers.isNotEmpty ? _pendingOffers.first : null;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppTheme.secondary500,
       body: Stack(
         children: [
-          // 1. Map Background Layer
-          Positioned.fill(
-            child: _buildMapBackground(),
+          mapbox.MapWidget(
+            cameraOptions: _cameraOptions,
+            onMapCreated: (map) => mapboxMap = map,
           ),
-
-          // 2. Top Navigation (Back Button)
-          Positioned(
-            top: 50,
-            left: 20,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8),
-                ],
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ),
-          ),
-
-          // 3. The Errand Request Sheet (Cyan Card)
-          if (currentOffer != null)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: _buildRequestPanel(currentOffer),
-            )
-          else
-            _buildEmptyState(),
-        ],
-      ),
-    );
-  }
-
-  // Placeholder for the Map. Replace this with your GoogleMap widget.
-  Widget _buildMapBackground() {
-    return Container(
-      color: const Color(0xFFF0F4F8), // Map-like grey
-      child: Stack(
-        children: [
-          // Draw some dummy roads/map elements just for visual context in this preview
-          Positioned(
-              top: 100,
-              right: 50,
-              child: Icon(Icons.location_on, color: _purpleMain, size: 40)),
-          Positioned(
-            top: 250,
-            left: 100,
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.green, width: 2)),
-              child: const CircleAvatar(
-                radius: 15,
-                backgroundImage: NetworkImage('https://i.pravatar.cc/150?img=11'), // Dummy avatar
-              ),
-            ),
-          ),
-          Center(
-              child: Text("Map View Area",
-                  style: TextStyle(
-                      color: Colors.grey[400],
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold))),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.all(20),
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 20),
-            Text('Searching for errands...',
-                style: TextStyle(
-                    color: _darkText, fontSize: 18, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRequestPanel(Map<String, dynamic> offer) {
-    final errand = offer['errand'] as Map<String, dynamic>?;
-    final tasks = errand?['tasks'] as List<dynamic>? ?? [];
-    final totalPrice = offer['price'] ?? 0;
-
-    // Extract user info
-    final requester = errand?['requester'] ?? {};
-    final userName = requester['name'] ?? 'Client';
-    final userRating = '71/100'; // Hardcoded based on image, or fetch from API
-
-    // Calculate time (dummy or real)
-    final expiresIn = offer['expiresIn'] ?? '24mins';
-
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: _bgCyan,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(30),
-          topRight: Radius.circular(30),
-        ),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, -5)),
-        ],
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // --- Header: User Profile & Price ---
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              children: [
-                const CircleAvatar(
-                  radius: 22,
-                  backgroundImage: NetworkImage('https://i.pravatar.cc/150?img=8'), // Placeholder
+          DraggableScrollableSheet(
+            initialChildSize: 0.65,
+            minChildSize: 0.4,
+            maxChildSize: 0.95,
+            controller: _sheetController,
+            builder: (context, scrollController) {
+              return Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.secondary500,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            "$userName | M",
-                            style: TextStyle(
-                              color: _darkText,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          const Icon(Icons.shield, color: Colors.green, size: 14),
-                          const SizedBox(width: 4),
-                          Text(
-                            userRating,
-                            style: TextStyle(color: _darkText.withOpacity(0.7), fontSize: 12),
-                          ),
-                        ],
-                      )
-                    ],
-                  ),
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(25, 30, 25, 40),
+                  child: currentOffer != null ? _buildRequestPanel(currentOffer) : _buildEmptyState(),
                 ),
-                // Divider
-                Container(height: 30, width: 2, color: _darkText),
-                const SizedBox(width: 10),
-                // Cash
-                Column(
-                  children: [
-                    const Icon(Icons.money, color: Colors.green, size: 20),
-                    Text("cash", style: TextStyle(fontSize: 10, color: _darkText)),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                Container(height: 30, width: 2, color: _darkText),
-                const SizedBox(width: 10),
-                // Price
-                Text(
-                  "XAF $totalPrice",
-                  style: TextStyle(
-                    color: _darkText,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 16,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // --- Tasks List ---
-          if (tasks.isNotEmpty) ...tasks.map((task) => _buildTaskPill(task)),
-
-          // --- Time Estimate ---
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: Text(
-              "In $expiresIn", // e.g. "In 24mins"
-              style: TextStyle(
-                color: _darkText,
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // --- Buttons Row 1: View Image & Decline ---
-          Row(
-            children: [
-              // View Image Button
-              Expanded(
-                flex: 4,
-                child: CustomPaint(
-                  painter: DashedBorderPainter(color: _darkText, strokeWidth: 1),
-                  child: TextButton.icon(
-                    onPressed: () {
-                      // Handle view image
-                    },
-                    icon: Icon(Icons.image_outlined, color: _darkText),
-                    label: Text("View image", style: TextStyle(color: _darkText)),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      backgroundColor: Colors.transparent,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Decline Button
-              Expanded(
-                flex: 5,
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.red, width: 1.5),
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  child: TextButton(
-                    onPressed: _isAccepting ? null : () => _declineOffer(offer['id']),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    child: const Text(
-                      "Decline",
-                      style: TextStyle(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                        fontFamily: 'Cursive', // Tries to mimic the playful font
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
-          // --- Accept Button (Slider Look) ---
-          RunAmSlider(
-            buttonText: "Request",
-            circleColor: AppTheme.success,
-            borderColor: AppTheme.success,
-            textStyle: TextStyle(
-              color: AppTheme.success
-            ),
-            enabled: true,
-            // Provide a synchronous callback; start async work without returning Future
-            onComplete: () {
-              _isAccepting ? null : () => _acceptOffer(offer['id']);
+              );
             },
           ),
         ],
@@ -532,67 +274,157 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
     );
   }
 
-  Widget _buildTaskPill(dynamic task) {
-    final desc = task['description'] ?? 'Task';
-    final price = task['price'] ?? 0;
+  Widget _buildRequestPanel(Map<String, dynamic> offer) {
+    final Map<String, dynamic>? errand = (offer['errand'] is Map)
+        ? Map<String, dynamic>.from(offer['errand'] as Map)
+        : null;
+    final List<dynamic> tasks = (errand != null && errand['tasks'] is List) ? List<dynamic>.from(errand['tasks'] as List) : [];
+    final double totalPrice = _computeTotalPrice(offer, tasks);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _cardBorder.withOpacity(0.5), width: 1),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          // Task Name
-          Expanded(
-            child: Text(
-              desc,
-              style: TextStyle(
-                color: _cardBorder,
-                fontWeight: FontWeight.w500,
-                fontSize: 14,
-              ),
-            ),
-          ),
-          // Price
-          Row(
+    final String userName = safeString(errand?['userName'] ?? 'Client');
+    final int trustScore = (errand?['userTrustScore'] != null) ? safeDouble(errand!['userTrustScore']).round() : 0;
+
+    final String rawUrl = safeString(errand?['imageUrl'] ?? errand?['image_url'] ?? '');
+    final String imageUrl = rawUrl.isNotEmpty ? rawUrl : 'https://ui-avatars.com/api/?name=$userName&background=8B6BFF&color=fff';
+
+    final String userRating = '$trustScore/100';
+    final String expiresIn = _computeExpiresIn(offer);
+    final String paymentMethod = safeString(offer['paymentMethod'] ?? errand?['paymentMethod'] ?? 'cash');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(25)),
+          child: Row(
             children: [
-              Text(
-                "XAF ",
-                style: TextStyle(
-                  color: _darkText,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
+              CircleAvatar(
+                radius: 28,
+                backgroundColor: AppTheme.primary700.withAlpha(30),
+                child: ClipOval(
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    width: 56,
+                    height: 56,
+                    errorBuilder: (context, error, stackTrace) => Icon(Icons.person, color: AppTheme.primary700),
+                  ),
                 ),
               ),
-              Text(
-                "$price",
-                style: TextStyle(
-                  color: _darkText,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(userName, style: TextStyle(color: AppTheme.primary700, fontWeight: FontWeight.w900, fontSize: 18)),
+                    Row(children: [
+                      Image.asset('assets/images/shield-tick.png', width: 14, errorBuilder: (c,e,s) => const Icon(Icons.verified, size: 14)),
+                      const SizedBox(width: 4),
+                      Text(userRating, style: TextStyle(color: _withOpacity(AppTheme.primary700, 0.7), fontSize: 13, fontWeight: FontWeight.bold)),
+                    ]),
+                  ],
                 ),
               ),
+              _vDivider(),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Column(children: [
+                  Image.asset('assets/images/cash.png', width: 24, errorBuilder: (c,e,s) => const Icon(Icons.payments)),
+                  Text(paymentMethod.toUpperCase(), style: TextStyle(color: AppTheme.primary700, fontSize: 11, fontWeight: FontWeight.bold)),
+                ]),
+              ),
+              _vDivider(),
+              const SizedBox(width: 8),
+              Text("XAF ${totalPrice.toInt()}", style: TextStyle(color: AppTheme.primary700, fontWeight: FontWeight.w900, fontSize: 18)),
             ],
           ),
-          const SizedBox(width: 12),
-          // Checkbox/Square (Visual only)
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: Colors.transparent, // or _purpleMain for checked
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: _cardBorder, width: 1.5),
+        ),
+        const SizedBox(height: 25),
+        ...tasks.map((t) => _buildTaskItem(safeString(t is Map ? t['description'] : t), safeString(t is Map ? t['price'] : '0'))),
+        const SizedBox(height: 10),
+        // Text("In $expiresIn", style: TextStyle(color: AppTheme.primary700, fontWeight: FontWeight.w900, fontSize: 17)),
+        const SizedBox(height: 25),
+        Row(
+          children: [
+            Expanded(
+              flex: 4,
+              child: DottedBorder(
+                options: RoundedRectDottedBorderOptions(
+                  radius: const Radius.circular(16),
+                  dashPattern: const [5, 5],
+                  strokeWidth: 2,
+                  color: AppTheme.primary700,
+                  padding: const EdgeInsets.all(10),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () {
+                    // Handle image preview
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(IconsaxPlusLinear.eye, color: AppTheme.primary700),
+                      const SizedBox(width: 8),
+                      Text(
+                        "View image",
+                        style: TextStyle(color: AppTheme.primary700),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
             ),
-            // child: Icon(Icons.check, size: 16, color: Colors.white), // Uncomment for checked state
-          )
+            const SizedBox(width: 15),
+            Expanded(
+              flex: 5,
+              child: GestureDetector(
+                onTap: () => _declineOffer(offer['id']),
+                child: Container(
+                  height: 55,
+                  decoration: BoxDecoration(border: Border.all(color: Colors.red, width: 2), borderRadius: BorderRadius.circular(15)),
+                  child: const Center(child: Text("Decline", style: TextStyle(color: Colors.red, fontWeight: FontWeight.w900, fontSize: 24, fontStyle: FontStyle.italic))),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 25),
+        RunAmSlider(
+          buttonText: "Confirm",
+          circleColor: AppTheme.primary700,
+          borderColor: AppTheme.primary700,
+          textStyle: TextStyle(color: AppTheme.secondary500, fontSize: 28, fontWeight: FontWeight.w900),
+          onComplete: () => _acceptOffer(offer['id']),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTaskItem(String label, String price) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(22), border: Border.all(color: _withOpacity(AppTheme.primary700, 0.1))),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: TextStyle(color: AppTheme.primary700, fontSize: 15, fontWeight: FontWeight.w500))),
+          Text("XAF", style: TextStyle(color: AppTheme.primary700, fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(width: 15),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+            decoration: BoxDecoration(border: Border.all(color: _withOpacity(AppTheme.primary700, 0.5)), borderRadius: BorderRadius.circular(12)),
+            child: Text(price, style: TextStyle(color: AppTheme.primary700, fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          const SizedBox(width: 15),
+          Container(width: 32, height: 32, decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.primary700, width: 2))),
         ],
       ),
     );
   }
+
+  Widget _vDivider() => Container(height: 35, width: 1.5, color: _withOpacity(AppTheme.primary700, 0.5));
+  Widget _buildEmptyState() => const Center(child: CircularProgressIndicator());
 }
