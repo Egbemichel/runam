@@ -281,70 +281,61 @@ class _HomeScreenState extends State<HomeScreen> {
                           return const Center(child: CircularProgressIndicator());
                         }
 
-                        // Choose which errands to show depending on active role
-                        final allErrands = errandController.errands;
-                        List displayedErrands;
                         if (authController.isRunnerActive) {
-                          // Show errands where current user is the assigned runner
-                          final String? myId = authController.user.value?.id;
-                          displayedErrands = allErrands.where((e) {
-                            try {
-                              return e.runnerId != null && myId != null && e.runnerId.toString() == myId;
-                            } catch (_) {
-                              return false;
-                            }
-                          }).toList();
-                        } else {
-                          // Buyer or unauthenticated: show errands owned by user (already fetched)
-                          displayedErrands = allErrands.toList();
-                        }
+                          // Logic: Fetch errands if we haven't started yet
+                          _assignedFetchFuture ??= Get.find<ErrandService>().fetchAssignedErrands();
 
-                        if (displayedErrands.isEmpty) {
-                          // If runner is active, attempt to query assigned errands from server
-                          if (authController.isRunnerActive) {
-                            _assignedFetchFuture ??= Get.find<ErrandService>().fetchAssignedErrands();
-                            return FutureBuilder<List<Errand>>(
-                              future: _assignedFetchFuture,
-                              builder: (context, snapshot) {
-                                if (snapshot.connectionState == ConnectionState.waiting) {
-                                  return const Center(child: CircularProgressIndicator());
-                                }
-                                if (snapshot.hasError) {
-                                  debugPrint('[HomeScreen] fetchAssignedErrands error: ${snapshot.error}');
-                                  return _buildEmptyState(isRunner: true);
-                                }
-                                final data = snapshot.data ?? [];
-                                if (data.isEmpty) {
-                                  return _buildEmptyState(isRunner: true);
-                                }
-                                // Display assigned errands
+                          return FutureBuilder<List<Errand>>(
+                            future: _assignedFetchFuture,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState == ConnectionState.waiting) {
+                                return const Center(child: CircularProgressIndicator());
+                              }
+
+                              if (snapshot.hasError) {
+                                debugPrint('[HomeScreen] UI Error: ${snapshot.error}');
+
+                                // CRITICAL: Reset the future so if they leave/re-enter it tries again
+                                // instead of staying stuck on this error.
                                 return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: List.generate(data.length, (index) {
-                                    return Padding(
-                                      padding: const EdgeInsets.only(bottom: 16),
-                                      child: ErrandCard(errand: data[index]),
-                                    );
-                                  }),
+                                  children: [
+                                    _buildEmptyState(isRunner: true),
+                                    TextButton(
+                                      onPressed: () {
+                                        setState(() { _assignedFetchFuture = null; });
+                                      },
+                                      child: const Text("Retry Connection"),
+                                    )
+                                  ],
                                 );
-                              },
-                            );
-                          }
-                          return _buildEmptyState(isRunner: authController.isRunnerActive);
+                              }
+
+                              final data = snapshot.data ?? [];
+                              if (data.isEmpty) return _buildEmptyState(isRunner: true);
+
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: data.map((item) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  child: ErrandCard(errand: item),
+                                )).toList(),
+                              );
+                            },
+                          );
                         }
 
-                        // Display errands as a Column with shrink-wrap
+                        // Buyer view (Standard ErrandController usage)
+                        final allErrands = errandController.errands;
+                        if (allErrands.isEmpty) return _buildEmptyState(isRunner: false);
+
                         return Column(
                           mainAxisSize: MainAxisSize.min,
-                          children: List.generate(displayedErrands.length, (index) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: ErrandCard(errand: displayedErrands[index]),
-                            );
-                          }),
+                          children: allErrands.map((item) => Padding(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: ErrandCard(errand: item),
+                          )).toList(),
                         );
                       }),
-
                       const SizedBox(height: 40),
 
                       // FOOTER LOGIN PROMPT

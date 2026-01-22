@@ -5,6 +5,7 @@ import 'package:get_storage/get_storage.dart';
 import 'package:runam/features/errand/controllers/errand_controllers.dart';
 import 'package:runam/services/graphql_client.dart';
 import 'controllers/auth_controller.dart';
+import 'controllers/buyer_errand_status_controller.dart';
 import 'controllers/location_controller.dart';
 import 'app/app.dart';
 import 'app/graphql_provider_wrapper.dart';
@@ -27,6 +28,7 @@ Future<void> main() async {
   Get.put(ErrandController());
   // Start session-level runner offers polling
   Get.put(RunnerOfferController(), permanent: true);
+  Get.put(BuyerErrandStatusController(), permanent: true);
 
   runApp(GraphQLProviderWrapper(child: const RunAmApp()));
 }

@@ -24,22 +24,23 @@ const String runnerPendingOffersQuery = r'''
   query RunnerPendingOffers {
     myPendingOffers {
       id
-      errandId
       price
       expiresAt
       expiresIn
-      
       errand {
         id
+        status
         type
-        speed
-        
+        # Use your specific backend field names here
+        userName
+        userTrustScore
+        userId
+        imageUrl
         goTo {
           latitude
           longitude
           address
         }
-        
         tasks {
           description
           price
@@ -53,6 +54,17 @@ const String acceptOfferMutation = r'''
   mutation AcceptOffer($offerId: ID!) {
     acceptErrandOffer(offerId: $offerId) {
       ok
+      errand {
+        id
+        status
+        userName
+        userTrustScore
+        imageUrl
+        tasks {
+          description
+          price
+        }
+      }
     }
   }
 ''';
