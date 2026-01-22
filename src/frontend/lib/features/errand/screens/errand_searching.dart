@@ -44,6 +44,7 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
   final Color kPrimaryPurple = const Color(0xFF8B6BFF);
 
   @override
+  @override
   void initState() {
     super.initState();
     _loaderController = AnimationController(
@@ -57,9 +58,10 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
 
     _locationController = Get.find<LocationController>();
 
-    // Start Global Tracking if not already tracking
+    // Use the global status controller to start polling
     if (widget.errandId != null) {
-      _statusController.startTracking(widget.errandId!);
+      final statusController = Get.find<BuyerErrandStatusController>();
+      statusController.startTracking(widget.errandId!);
     }
 
     _initializeMap();

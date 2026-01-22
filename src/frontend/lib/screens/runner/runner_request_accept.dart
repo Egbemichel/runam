@@ -8,6 +8,8 @@ import 'package:graphql_flutter/graphql_flutter.dart';
 import 'package:get/get.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
+import 'package:go_router/go_router.dart';
+import '../../app/router.dart';
 import '../../features/errand/screens/errand_in_progress.dart';
 import '../home/home_screen.dart';
 import '../../controllers/location_controller.dart';
@@ -114,23 +116,6 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
     return sum;
   }
 
-  String _computeExpiresIn(Map<String, dynamic>? offer) {
-    try {
-      final expiresAt = offer?['expiresAt'] ?? offer?['expires_at'] ?? offer?['expiresIn'];
-      if (expiresAt == null) return safeString(offer?['expiresIn'] ?? 'Soon');
-      if (expiresAt is String && !expiresAt.contains(RegExp(r'\d{4}-\d{2}-\d{2}'))) {
-        return expiresAt;
-      }
-      final dt = DateTime.parse(expiresAt.toString()).toUtc();
-      final diff = dt.difference(DateTime.now().toUtc());
-      if (diff.inMinutes <= 0) return 'Now';
-      if (diff.inMinutes < 60) return '${diff.inMinutes}mins';
-      if (diff.inHours < 24) return '${diff.inHours}h ${diff.inMinutes % 60}m';
-      return '${diff.inDays}d';
-    } catch (_) {
-      return safeString(offer?['expiresIn'] ?? 'Soon');
-    }
-  }
 
   Future<void> _acceptOffer(String offerId) async {
     if (_isAccepting) return;
@@ -158,7 +143,14 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
       final bool ok = data?['ok'] == true;
 
       if (ok) {
-        Get.find<RunnerOfferController>().stopPolling();
+        // 1. CLEAR REDIRECT STATE: This is vital for GoRouter
+        final runnerController = Get.find<RunnerOfferController>();
+        runnerController.stopPolling();
+        // Empty the list so the 'redirect' logic in your router doesn't trap the user here
+        // runnerController.offers.value = [];
+        runnerController.latestOffers.clear();
+        try { offersRefresh.value = offersRefresh.value + 1; } catch (_) {}
+
         _offersSub?.cancel();
 
         final Map<String, dynamic> officialErrand = data['errand'] ?? {};
@@ -168,9 +160,14 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
               const SnackBar(content: Text('Offer accepted!'), backgroundColor: Colors.green)
           );
 
-          // Use Get.off to avoid Navigator 2.0 imperative API conflicts
-          Future.delayed(const Duration(milliseconds: 100), () {
-            Get.off(() => ErrandInProgressScreen(errand: officialErrand));
+          // 2. NAVIGATE VIA GOROUTER: Use the root navigator key to be safe
+          // This ensures the screen replaces the dashboard correctly
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final navContext = rootNavigatorKey.currentContext ?? context;
+
+            // FIX: Remove Navigator.of(context).pushReplacement
+            // USE: context.go() which GoRouter expects
+            context.go('/errand-in-progress', extra: officialErrand);
           });
         }
       } else {
@@ -189,10 +186,21 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
 
   void _handleExit(String message, {bool isWarning = false}) {
     if (!mounted) return;
+
+    // Clear offers so the router doesn't redirect us back in
+    try {
+      final controller = Get.find<RunnerOfferController>();
+      // controller.offers.value = [];
+      controller.latestOffers.clear();
+      try { offersRefresh.value = offersRefresh.value + 1; } catch (_) {}
+    } catch (_) {}
+
     ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), backgroundColor: isWarning ? Colors.orange : Colors.red)
     );
-    Get.offAll(() => const HomeScreen());
+
+    // Use GoRouter's declarative way to go back home
+    context.go(HomeScreen.path);
   }
 
   Future<void> _declineOffer(String offerId) async {
@@ -288,7 +296,6 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
     final String imageUrl = rawUrl.isNotEmpty ? rawUrl : 'https://ui-avatars.com/api/?name=$userName&background=8B6BFF&color=fff';
 
     final String userRating = '$trustScore/100';
-    final String expiresIn = _computeExpiresIn(offer);
     final String paymentMethod = safeString(offer['paymentMethod'] ?? errand?['paymentMethod'] ?? 'cash');
 
     return Column(
