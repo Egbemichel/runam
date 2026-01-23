@@ -59,12 +59,12 @@ INSTALLED_APPS = [
     'apps.locations.apps.LocationsConfig',
     'apps.roles.apps.RolesConfig',
     'apps.trust.apps.TrustConfig',
-    'errand_location'
-
+    'errand_location',
+    'storages',
 ]
 
 SITE_ID = 1
-ASGI_APPLICATION  = 'core.asgi.application'
+ASGI_APPLICATION = 'core.asgi.application'
 # -------------------------------------------------------------------
 # Middleware
 # -------------------------------------------------------------------
@@ -191,9 +191,6 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # Storage mode: 'local' or 'supabase'
 STORAGE_MODE = os.getenv('STORAGE_MODE', 'dev' if DEBUG else 'prod')
-SUPABASE_URL = os.getenv('SUPABASE_URL', '')
-SUPABASE_BUCKET = os.getenv('SUPABASE_BUCKET', 'public')
-SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
 
 # -------------------------------------------------------------------
 # Errand configuration
@@ -253,3 +250,40 @@ LOGGING = {
         'django': {'handlers': ['console'], 'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO')},
     },
 }
+
+if not DEBUG:
+    # Storage settings
+    # Configure your storage settings for production
+    AWS_ACCESS_KEY_ID = os.environ.get("SUPABASE_S3_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = os.environ.get("SUPABASE_S3_SECRET_ACCESS_KEY")
+    AWS_STORAGE_BUCKET_NAME = os.environ.get("SUPABASE_S3_BUCKET_NAME")
+    AWS_S3_REGION_NAME = os.environ.get("SUPABASE_S3_REGION_NAME")
+    AWS_S3_ENDPOINT_URL = os.environ.get("SUPABASE_S3_ENDPOINT_URL")
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_ADDRESSING_STYLE = "path"
+    AWS_QUERYSTRING_AUTH = True
+
+    STORAGES = {
+        "staticfiles": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {
+                "access_key": AWS_ACCESS_KEY_ID,
+                "secret_key": AWS_SECRET_ACCESS_KEY,
+                "bucket_name": AWS_STORAGE_BUCKET_NAME,
+                "region_name": AWS_S3_REGION_NAME,
+                "endpoint_url": AWS_S3_ENDPOINT_URL,
+                "location": "static",
+            },
+        },
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            "OPTIONS": {
+                "access_key": AWS_ACCESS_KEY_ID,
+                "secret_key": AWS_SECRET_ACCESS_KEY,
+                "bucket_name": AWS_STORAGE_BUCKET_NAME,
+                "region_name": AWS_S3_REGION_NAME,
+                "endpoint_url": AWS_S3_ENDPOINT_URL,
+                "location": "media",
+            },
+        },
+    }
