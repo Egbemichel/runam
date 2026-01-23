@@ -6,6 +6,8 @@ Configured for GraphQL (Graphene + graphql-jwt), not REST.
 import os
 from datetime import timedelta
 from pathlib import Path
+
+import dj_database_url
 from dotenv import load_dotenv
 
 # -------------------------------------------------------------------
@@ -176,6 +178,8 @@ USE_TZ = True
 # Static files
 # -------------------------------------------------------------------
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # -------------------------------------------------------------------
@@ -252,6 +256,14 @@ LOGGING = {
 }
 
 if not DEBUG:
+    DATABASES = {
+        'default': dj_database_url.config(
+            # Replace this value with your local database's connection string.
+            default=os.getenv('SUPABASE_POSTGRESQL_URL'),
+            conn_max_age=600
+        )
+    }
+
     # Storage settings
     # Configure your storage settings for production
     AWS_ACCESS_KEY_ID = os.environ.get("SUPABASE_S3_ACCESS_KEY_ID")
