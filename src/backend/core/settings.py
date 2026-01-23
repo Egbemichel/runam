@@ -21,7 +21,7 @@ SECRET_KEY = os.getenv(
     'django-insecure-k#oc+-y2hbem_c_bck#ka_#lzb9=k@sd)wx!^rk)zovt4q0sd-'
 )
 
-DEBUG = True
+DEBUG = os.getenv("DEBUG", False) == 'True'
 ALLOWED_HOSTS = ["*"]
 
 # -------------------------------------------------------------------
@@ -115,7 +115,12 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    },
+    'supabase': dj_database_url.config(
+        # Replace this value with your local database's connection string.
+        default=os.getenv('SUPABASE_POSTGRESQL_URL'),
+        conn_max_age=600
+    )
 }
 
 # -------------------------------------------------------------------
@@ -256,6 +261,8 @@ LOGGING = {
 }
 
 if not DEBUG:
+    ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(" ") if os.getenv('ALLOWED_HOSTS') else []
+
     DATABASES = {
         'default': dj_database_url.config(
             # Replace this value with your local database's connection string.
