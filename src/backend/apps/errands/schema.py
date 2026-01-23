@@ -8,6 +8,8 @@ from graphene_file_upload.scalars import Upload
 from graphql import GraphQLError
 
 
+# Structural Pattern: Adapter
+# The store_uploaded_file function adapts Django's UploadedFile interface to your storage system.
 def store_uploaded_file(uploaded_file, user) -> str:
     """
     Handles a Django UploadedFile object (from graphene-file-upload).
@@ -42,6 +44,8 @@ def store_uploaded_file(uploaded_file, user) -> str:
     return url_path
 
 
+# Structural Pattern: Facade
+# The UploadImage mutation acts as a Facade, providing a simple interface for image upload and storage.
 class UploadImage(graphene.Mutation):
     class Arguments:
         file = Upload(required=True)
@@ -58,6 +62,7 @@ class UploadImage(graphene.Mutation):
         # 'file' here is a Django UploadedFile object, not Base64.
         # We need a new helper or to modify image_services.py
         try:
+            # Adapter Pattern: Adapts the file upload from GraphQL to the backend storage system.
             url = store_uploaded_file(file, user) # New helper below
             return UploadImage(success=True, image_url=url)
         except Exception as e:

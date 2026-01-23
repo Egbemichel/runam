@@ -2,93 +2,112 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
-import '../features/errand/models/errand.dart';
-import '../features/errand/screens/errand_in_progress.dart';
+import 'package:go_router/go_router.dart';
 import '../graphql/errand_queries.dart';
 import '../services/graphql_client.dart';
-import 'auth_controller.dart';
+import '../app/router.dart'; // rootNavigatorKey is defined here
 
+/// Behavioral Pattern: Mediator
+/// This controller mediates between the UI, backend polling, and navigation logic for buyer errand status.
+/// It encapsulates the polling logic and navigation, so the UI does not need to know about backend or routing details.
 class BuyerErrandStatusController extends GetxController {
-  static const _tag = '🕵️ [BuyerErrandStatusController]';
+  static const _tag = '🕵️ [BuyerStatus]';
 
   Timer? _timer;
+  // Observer Pattern: Rx variables allow UI to reactively update when these change
   final RxnString trackingErrandId = RxnString();
   final RxBool isChecking = false.obs;
 
-  @override
-  void onInit() {
-    super.onInit();
-    // Automatically stop tracking if user logs out
-    ever(Get.find<AuthController>().isAuthenticated, (bool auth) {
-      if (!auth) stopTracking();
-    });
-  }
-
-  /// Start global polling for a specific errand
+  /// Command Pattern: Encapsulates the action of starting polling for an errand
   void startTracking(String errandId) {
-    debugPrint('$_tag Starting global tracking for Errand: $errandId');
+    debugPrint('$_tag [STEP 1] Start Tracking for: $errandId');
     trackingErrandId.value = errandId;
     _timer?.cancel();
-
     _timer = Timer.periodic(const Duration(seconds: 4), (_) => _checkStatus());
-    _checkStatus(); // Initial check
+    _checkStatus();
   }
 
+  /// Command Pattern: Encapsulates the action of stopping polling
   void stopTracking() {
-    debugPrint('$_tag Stopping tracking');
+    debugPrint('$_tag [STOP] Polling terminated.');
     _timer?.cancel();
+    _timer = null;
     trackingErrandId.value = null;
   }
 
+  /// Template Method Pattern: _checkStatus defines the skeleton of polling logic, with overridable steps for error/status handling
   Future<void> _checkStatus() async {
-    if (trackingErrandId.value == null || isChecking.value) return;
+    if (trackingErrandId.value == null) return;
+    if (isChecking.value) {
+      debugPrint('$_tag [SKIP] Already checking status...');
+      return;
+    }
 
     isChecking.value = true;
     try {
+      debugPrint('$_tag [STEP 2] Requesting status from Backend for ID: ${trackingErrandId.value}');
       final client = GraphQLClientInstance.client;
       final result = await client.query(QueryOptions(
-        document: gql(errandStatusQuery), // Ensure this query returns status and runner info
+        document: gql(errandStatusQuery),
         variables: {'id': trackingErrandId.value},
         fetchPolicy: FetchPolicy.networkOnly,
       ));
 
       if (result.hasException) {
-        debugPrint('$_tag Poll error: ${result.exception}');
+        debugPrint('$_tag [ERROR] GQL Error: ${result.exception}');
         return;
       }
 
       final data = result.data?['errand'];
-      if (data == null) return;
+      if (data == null) {
+        debugPrint('$_tag [WARN] Errand data is NULL');
+        return;
+      }
 
       final String status = data['status'] ?? '';
+      debugPrint('$_tag [STEP 3] Current Backend Status: "$status"');
 
-      // TRIGGER: If runner accepted, navigate the Buyer
+      // Strategy Pattern: Different strategies for handling status
       if (status == 'ACCEPTED' || status == 'IN_PROGRESS') {
-        debugPrint('$_tag Errand Accepted! Navigating Buyer...');
+        debugPrint('$_tag [STEP 4] STATUS MATCHED! Stopping poll and moving...');
         stopTracking();
         _navigateToInProgress(data);
       } else if (status == 'CANCELLED' || status == 'EXPIRED') {
+        debugPrint('$_tag [EXIT] Errand was $status');
         stopTracking();
-        Get.snackbar("Errand Update", "Your errand was $status",
-            snackPosition: SnackPosition.BOTTOM);
+        Get.snackbar("Errand Update", "Your errand was $status");
       }
     } catch (e) {
-      debugPrint('$_tag Exception: $e');
+      debugPrint('$_tag [CRITICAL] Exception in loop: $e');
     } finally {
       isChecking.value = false;
     }
   }
 
+  /// Command Pattern: Encapsulates the navigation action
   void _navigateToInProgress(Map<String, dynamic> errandData) {
-    // Ensure we aren't already on the progress screen
-    if (Get.currentRoute.contains('errand-in-progress')) return;
+    debugPrint('$_tag [STEP 5] Attempting Navigation...');
 
-    Get.offAll(() => ErrandInProgressScreen(errand: errandData));
-  }
+    // 1. Get the Context via the Global Key
+    final context = rootNavigatorKey.currentContext;
 
-  @override
-  void onClose() {
-    _timer?.cancel();
-    super.onClose();
+    if (context == null) {
+      debugPrint('$_tag [FAILURE] rootNavigatorKey.currentContext is NULL. Navigation cannot proceed.');
+      return;
+    }
+
+    debugPrint('$_tag [SUCCESS] Context found. Executing context.go()');
+
+    // 2. Execute GoRouter navigation
+    // We wrap in a callback to ensure we aren't in the middle of a build phase
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.go(
+        '/errand-in-progress',
+        extra: {
+          ...errandData,
+          'isRunner': false, // Crucial for Buyer UI
+        },
+      );
+    });
   }
 }

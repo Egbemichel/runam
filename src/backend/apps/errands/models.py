@@ -3,6 +3,8 @@ from django.db import models
 from django.utils import timezone
 from django.apps import apps
 
+# Creational Pattern: Factory Method
+# Django's get_user_model() abstracts the instantiation of the User model.
 User = get_user_model()
 
 class Errand(models.Model):
@@ -67,7 +69,10 @@ class Errand(models.Model):
     accepted_at = models.DateTimeField(null=True, blank=True)
 
     def refresh_open_state(self):
-        """Toggle is_open and status to EXPIRED if past expires_at and not terminal."""
+        """
+        Behavioral Pattern: Template Method
+        This method defines a skeleton for updating the open state of an errand.
+        """
         if self.expires_at and self.status not in [self.Status.COMPLETED, self.Status.CANCELLED, self.Status.EXPIRED]:
             if timezone.now() >= self.expires_at:
                 self.is_open = False
@@ -88,6 +93,8 @@ class Errand(models.Model):
         return self.quoted_total_price
 
 
+# Creational Pattern: Factory Method
+# apps.get_model is used to dynamically retrieve models.
 def get_errand_location_model():
     return apps.get_model('errand_location', 'ErrandLocation')
 
@@ -139,4 +146,3 @@ class ErrandTask(models.Model):
 
     def __str__(self):
         return f"{self.description} - XAF {self.price}"
-

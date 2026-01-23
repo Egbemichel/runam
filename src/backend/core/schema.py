@@ -75,9 +75,6 @@ class LocationType(DjangoObjectType):
             "address",
         )
 
-
-
-
 # =====================
 # USER TYPE FIX
 # =====================
@@ -497,8 +494,10 @@ class ErrandOfferType(graphene.ObjectType):
 
 class AcceptErrandOffer(graphene.Mutation):
     ok = graphene.Boolean()
-    # Add the errand field here so the Runner gets the data immediately
     errand = graphene.Field('core.schema.ErrandType')
+    total_price = graphene.Int()
+    buyer_trust_score = graphene.Int()
+    runner_trust_score = graphene.Int()
 
     class Arguments:
         offer_id = graphene.ID(required=True)
@@ -508,10 +507,8 @@ class AcceptErrandOffer(graphene.Mutation):
         user = info.context.user
 
         try:
-            # 1. Use an atomic transaction so if the service fails,
-            # the offer status change is rolled back.
             with transaction.atomic():
-                offer = ErrandOffer.objects.select_related("errand").select_for_update().get(
+                offer = ErrandOffer.objects.select_related("errand", "errand__user", "errand__user__profile").select_for_update().get(
                     id=offer_id,
                     runner=user,
                     status=ErrandOffer.Status.PENDING
@@ -529,13 +526,23 @@ class AcceptErrandOffer(graphene.Mutation):
                 offer.save(update_fields=["status", "responded_at"])
 
                 # 4. Update Errand State via Service
-                # This should set errand.status = 'IN_PROGRESS' and errand.runner = user
                 services_accept_offer(offer.errand, user)
 
                 # Refresh from DB to get the updated status/runner info
                 offer.errand.refresh_from_db()
 
-                return AcceptErrandOffer(ok=True, errand=offer.errand)
+                # Get trust scores
+                buyer_trust = getattr(getattr(offer.errand.user, 'profile', None), 'trust_score', None)
+                runner_trust = getattr(getattr(user, 'profile', None), 'trust_score', None)
+                total_price = getattr(offer.errand, 'quoted_total_price', None)
+
+                return AcceptErrandOffer(
+                    ok=True,
+                    errand=offer.errand,
+                    total_price=total_price,
+                    buyer_trust_score=buyer_trust,
+                    runner_trust_score=runner_trust
+                )
 
         except ErrandOffer.DoesNotExist:
             raise GraphQLError("Offer not found or already processed")
