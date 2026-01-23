@@ -403,7 +403,7 @@ class _RunnerDashboardState extends State<RunnerDashboard> {
           buttonText: "Confirm",
           circleColor: AppTheme.primary700,
           borderColor: AppTheme.primary700,
-          textStyle: TextStyle(color: AppTheme.secondary500, fontSize: 28, fontWeight: FontWeight.w900),
+          textStyle: TextStyle(color: AppTheme.primary700, fontSize: 28, fontWeight: FontWeight.w900),
           onComplete: () => _acceptOffer(offer['id']),
         ),
       ],

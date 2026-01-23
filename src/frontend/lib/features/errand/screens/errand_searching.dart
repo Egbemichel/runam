@@ -1,19 +1,20 @@
+// lib/screens/errand/errand_searching_screen.dart
+
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mapbox;
 import 'package:get/get.dart';
 import '../../../app/theme.dart';
 import '../../../controllers/location_controller.dart';
-import '../../../controllers/buyer_errand_status_controller.dart'; // Import your new controller
+import '../../../controllers/buyer_tracking_controller.dart';
 
 class ErrandSearchingScreen extends StatefulWidget {
   final String? errandId;
   final List<Map<String, dynamic>>? runners;
 
-  static const routeName = 'errand-searching';
-  static const path = '/errand-searching';
+  static const String routeName = "errand-searching";
+  static const String path = '/errand-searching';
 
   const ErrandSearchingScreen({
     super.key,
@@ -25,43 +26,29 @@ class ErrandSearchingScreen extends StatefulWidget {
   State<ErrandSearchingScreen> createState() => _ErrandSearchingState();
 }
 
-class _ErrandSearchingState extends State<ErrandSearchingScreen>
-    with SingleTickerProviderStateMixin {
-
-  // Controllers
-  late AnimationController _loaderController;
-  late final LocationController _locationController;
-  final BuyerErrandStatusController _statusController = Get.find<BuyerErrandStatusController>();
-
-  // Mapbox
+class _ErrandSearchingState extends State<ErrandSearchingScreen> {
+  // Mapbox & Location
   mapbox.MapboxMap? mapboxMap;
   mapbox.CameraOptions? _cameraOptions;
+  late final LocationController _locationController;
 
-  // Runners (Visual state only)
+  // Dependency Injection
+  final BuyerTrackingController _statusController = Get.find<BuyerTrackingController>();
+
+  // Runner Visuals
   final Map<String, Offset> _runnerScreenPositions = {};
   List<Map<String, dynamic>> _runners = [];
 
-  final Color kPrimaryPurple = const Color(0xFF8B6BFF);
-
-  @override
   @override
   void initState() {
     super.initState();
-    _loaderController = AnimationController(
-      duration: const Duration(seconds: 2),
-      vsync: this,
-    )..repeat();
-
-    if (widget.runners != null) {
-      _runners = List.from(widget.runners!);
-    }
-
     _locationController = Get.find<LocationController>();
+    if (widget.runners != null) _runners = List.from(widget.runners!);
 
-    // Use the global status controller to start polling
+    // Start the global tracking process.
+    // Ensure the method name matches your Controller (startTracking or startPolling)
     if (widget.errandId != null) {
-      final statusController = Get.find<BuyerErrandStatusController>();
-      statusController.startTracking(widget.errandId!);
+      _statusController.monitorErrand(widget.errandId!);
     }
 
     _initializeMap();
@@ -90,12 +77,13 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
     _updateAllRunnerScreenPositions();
   }
 
+  /// Projects the Lat/Lng of nearby runners into screen pixel offsets
   Future<void> _updateAllRunnerScreenPositions() async {
     if (mapboxMap == null || _runners.isEmpty) return;
     final Map<String, Offset> newPositions = {};
 
     for (final r in _runners) {
-      final id = (r['id'] ?? r['userId'] ?? r['runnerId'])?.toString() ?? '';
+      final id = (r['id'] ?? r['userId'] ?? r['runnerId']).toString();
       final lat = (r['latitude'] ?? r['lat']) as num?;
       final lng = (r['longitude'] ?? r['lng']) as num?;
 
@@ -105,19 +93,14 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
         final screenPoint = await mapboxMap!.pixelForCoordinate(
             mapbox.Point(coordinates: mapbox.Position(lng.toDouble(), lat.toDouble()))
         );
+        // Offset by half the avatar size (22) to center it on the coordinate
         newPositions[id] = Offset(screenPoint.x - 22, screenPoint.y - 22);
       } catch (e) {
-        debugPrint('Position conversion failed: $e');
+        debugPrint('Position conversion failed for runner $id: $e');
       }
     }
 
     if (mounted) setState(() => _runnerScreenPositions.addAll(newPositions));
-  }
-
-  @override
-  void dispose() {
-    _loaderController.dispose();
-    super.dispose();
   }
 
   @override
@@ -126,38 +109,55 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
       backgroundColor: Colors.white,
       body: Stack(
         children: [
-          // 1. Map
+          // 1. Map Layer
           if (_cameraOptions != null)
             mapbox.MapWidget(
               cameraOptions: _cameraOptions,
               onMapCreated: _onMapCreated,
-              onCameraChangeListener: (camera) => _updateAllRunnerScreenPositions(),
+              onCameraChangeListener: (_) => _updateAllRunnerScreenPositions(),
             )
           else
             const Center(child: CircularProgressIndicator()),
 
-          // 2. UI Overlay (Obx makes this reactive to the global status)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Center(
+          // 2. Status Overlay - Reactive to the Global Controller
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 20),
                 child: Obx(() {
-                  // If global controller found a runner, show "Runner Found"
-                  if (_statusController.isChecking.value && _runners.isEmpty) {
-                    return const SizedBox(
-                      width: 80, height: 80,
-                      child: CircularProgressIndicator(strokeWidth: 4, color: AppTheme.primary700),
-                    );
-                  }
+                  final status = _statusController.currentStatus.value;
+                  // If status is 'ACCEPTED', the controller will navigate away automatically.
+                  // We show 'RUNNER_FOUND' for the brief moment during transition if the DB updates.
+                  final isFound = status == 'ACCEPTED' || status == 'IN_PROGRESS';
 
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(24),
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(30),
+                      boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10)],
                     ),
-                    child: Text(
-                      'Searching for runners...',
-                      style: const TextStyle(color: AppTheme.primary700, fontWeight: FontWeight.bold),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (!isFound)
+                          const SizedBox(
+                            width: 18, height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppTheme.primary700
+                            ),
+                          ),
+                        if (!isFound) const SizedBox(width: 12),
+                        Text(
+                          isFound ? 'Runner Found!' : 'Finding your Runner...',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primary700
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 }),
@@ -165,19 +165,20 @@ class _ErrandSearchingState extends State<ErrandSearchingScreen>
             ),
           ),
 
-          // 3. Runner Avatars
+          // 3. Runner Markers - Floating on top of the Map
           ..._runners.map((runner) {
-            final id = (runner['id'] ?? runner['userId'])?.toString() ?? '';
+            final id = (runner['id'] ?? runner['userId']).toString();
             final pos = _runnerScreenPositions[id];
             if (pos == null) return const SizedBox.shrink();
 
             return AnimatedPositioned(
               key: ValueKey(id),
-              duration: const Duration(milliseconds: 600),
-              left: pos.dx, top: pos.dy,
-              child: AvatarPin(imageUrl: runner['imageUrl'] ?? 'https://i.pravatar.cc/150?u=$id'),
+              duration: const Duration(milliseconds: 500),
+              left: pos.dx,
+              top: pos.dy,
+              child: AvatarPin(imageUrl: runner['imageUrl'] ?? ''),
             );
-          }).toList(),
+          }),
         ],
       ),
     );
@@ -191,11 +192,13 @@ class AvatarPin extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
+      padding: const EdgeInsets.all(2),
+      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+      child: CircleAvatar(
+        radius: 20,
+        backgroundImage: imageUrl.isNotEmpty ? NetworkImage(imageUrl) : null,
+        child: imageUrl.isEmpty ? const Icon(Icons.person) : null,
       ),
-      child: CircleAvatar(radius: 22, backgroundImage: NetworkImage(imageUrl)),
     );
   }
 }

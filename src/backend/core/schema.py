@@ -24,6 +24,8 @@ from errand_location.models import ErrandLocation
 from apps.errands.schema import UploadImage
 from runners.services import get_nearby_runners, distance_between
 from apps.errands.services import accept_offer as services_accept_offer
+from apps.trust.models import Rating
+from apps.trust.services import recalculate_trust_score
 
 import logging
 
@@ -40,11 +42,20 @@ class RunnerType(graphene.ObjectType):
     id = graphene.ID()
     name = graphene.String()
     image_url = graphene.String()
+    avatar_url = graphene.String()  # Add this for frontend compatibility
     trust_score = graphene.Float()
     latitude = graphene.Float()
     longitude = graphene.Float()
     distance_m = graphene.Float()
     has_pending_offer = graphene.Boolean()
+
+    def resolve_avatar_url(self, info):
+        # Prefer explicit image_url, fallback to profile avatar
+        if hasattr(self, 'image_url') and self.image_url:
+            return self.image_url
+        profile = getattr(self, 'profile', None)
+        return getattr(profile, 'avatar', None) if profile else None
+
 
 class RoleType(DjangoObjectType):
     class Meta:
@@ -916,6 +927,57 @@ class DeleteErrand(graphene.Mutation):
         return DeleteErrand(ok=True)
 
 # =====================
+# RATING MUTATION
+# =====================
+
+
+class CreateRating(graphene.Mutation):
+    class Arguments:
+        errand_id = graphene.ID(required=True)
+        ratee_id = graphene.ID(required=True)
+        score = graphene.Int(required=True)
+        comment = graphene.String()
+
+    ok = graphene.Boolean()
+    rating = graphene.Field(lambda: RatingType)
+    new_trust_score = graphene.Int()
+
+    @login_required
+    def mutate(self, info, errand_id, ratee_id, score, comment=None):
+        user = info.context.user
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            errand = Errand.objects.get(pk=errand_id)
+            ratee = User.objects.get(pk=ratee_id)
+
+            # Prevent duplicate rating
+            if Rating.objects.filter(errand=errand, rater=user, ratee=ratee).exists():
+                raise GraphQLError("You have already rated this user for this errand.")
+
+            # Create the rating
+            rating = Rating.objects.create(
+                errand=errand,
+                rater=user,
+                ratee=ratee,
+                score=score,
+                comment=comment
+            )
+
+            # Recalculate the trust score for the ratee
+            new_score = recalculate_trust_score(ratee)
+
+            return CreateRating(ok=True, rating=rating, new_trust_score=new_score)
+        except Exception as e:
+            raise GraphQLError(str(e))
+
+# Add the RatingType for the mutation
+class RatingType(DjangoObjectType):
+    class Meta:
+        model = Rating
+        fields = ("id", "errand", "rater", "ratee", "score", "comment", "created_at")
+
+# =====================
 # QUERIES
 # =====================
 
@@ -929,6 +991,7 @@ class Query(graphene.ObjectType):
     my_assigned_errands = graphene.List(ErrandType, name='myAssignedErrands')
     assigned_errands = graphene.List(ErrandType, name='assignedErrands')
     my_runs = graphene.List(ErrandType, name='myRuns')
+    errand = graphene.Field(ErrandType, id=graphene.ID(required=True))
 
     @login_required
     def resolve_my_errands(self, info, **kwargs):
@@ -1037,6 +1100,17 @@ class Query(graphene.ObjectType):
 
         return result
 
+    @login_required
+    def resolve_errand(self, info, id):
+        user = info.context.user
+        from django.db.models import Q
+        try:
+            # Only allow access if user is the creator or assigned runner
+            errand = Errand.objects.get(Q(id=id) & (Q(user=user) | Q(runner=user)))
+            return errand
+        except Errand.DoesNotExist:
+            return None
+
 # =====================
 # ROOT SCHEMA
 # =====================
@@ -1068,6 +1142,9 @@ class Mutation(graphene.ObjectType):
     save_errand_draft = SaveErrandDraft.Field()
     update_errand = UpdateErrand.Field()
     delete_errand = DeleteErrand.Field()
+
+    # New: Rating mutation
+    create_rating = CreateRating.Field()
 
 
 schema = graphene.Schema(
