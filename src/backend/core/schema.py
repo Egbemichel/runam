@@ -75,9 +75,6 @@ class LocationType(DjangoObjectType):
             "address",
         )
 
-
-
-
 # =====================
 # USER TYPE FIX
 # =====================
