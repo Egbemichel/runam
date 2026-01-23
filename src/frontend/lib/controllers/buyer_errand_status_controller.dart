@@ -7,13 +7,18 @@ import '../graphql/errand_queries.dart';
 import '../services/graphql_client.dart';
 import '../app/router.dart'; // rootNavigatorKey is defined here
 
+/// Behavioral Pattern: Mediator
+/// This controller mediates between the UI, backend polling, and navigation logic for buyer errand status.
+/// It encapsulates the polling logic and navigation, so the UI does not need to know about backend or routing details.
 class BuyerErrandStatusController extends GetxController {
   static const _tag = '🕵️ [BuyerStatus]';
 
   Timer? _timer;
+  // Observer Pattern: Rx variables allow UI to reactively update when these change
   final RxnString trackingErrandId = RxnString();
   final RxBool isChecking = false.obs;
 
+  /// Command Pattern: Encapsulates the action of starting polling for an errand
   void startTracking(String errandId) {
     debugPrint('$_tag [STEP 1] Start Tracking for: $errandId');
     trackingErrandId.value = errandId;
@@ -22,6 +27,7 @@ class BuyerErrandStatusController extends GetxController {
     _checkStatus();
   }
 
+  /// Command Pattern: Encapsulates the action of stopping polling
   void stopTracking() {
     debugPrint('$_tag [STOP] Polling terminated.');
     _timer?.cancel();
@@ -29,6 +35,7 @@ class BuyerErrandStatusController extends GetxController {
     trackingErrandId.value = null;
   }
 
+  /// Template Method Pattern: _checkStatus defines the skeleton of polling logic, with overridable steps for error/status handling
   Future<void> _checkStatus() async {
     if (trackingErrandId.value == null) return;
     if (isChecking.value) {
@@ -60,6 +67,7 @@ class BuyerErrandStatusController extends GetxController {
       final String status = data['status'] ?? '';
       debugPrint('$_tag [STEP 3] Current Backend Status: "$status"');
 
+      // Strategy Pattern: Different strategies for handling status
       if (status == 'ACCEPTED' || status == 'IN_PROGRESS') {
         debugPrint('$_tag [STEP 4] STATUS MATCHED! Stopping poll and moving...');
         stopTracking();
@@ -76,6 +84,7 @@ class BuyerErrandStatusController extends GetxController {
     }
   }
 
+  /// Command Pattern: Encapsulates the navigation action
   void _navigateToInProgress(Map<String, dynamic> errandData) {
     debugPrint('$_tag [STEP 5] Attempting Navigation...');
 

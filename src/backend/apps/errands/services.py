@@ -11,14 +11,18 @@ from runners.services import distance_between
 
 logger = logging.getLogger(__name__)
 
+# Structural Pattern: Facade
+# This services.py file acts as a Facade, providing a simplified interface to complex subsystems (image storage, offer management, notifications).
+
 # Optional Supabase import
 try:
     import supabase as _supabase_module  # type: ignore
 except Exception:  # pragma: no cover
     _supabase_module = None
 
+# Creational Pattern: Builder
+# The following functions build complex objects step-by-step (e.g., images, offers).
 
-# Commenting out base64 image handling and supabase
 def _parse_base64_image(data: str) -> Tuple[bytes, str]:
     """
     Accepts either raw base64 or data URL (data:image/jpeg;base64,....)

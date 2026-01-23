@@ -11,9 +11,12 @@ from apps.users.models import UserProfile
 from graphql_jwt.shortcuts import get_token
 from graphql_jwt.refresh_token.shortcuts import create_refresh_token
 
+# Creational Pattern: Factory Method
+# get_user_model abstracts the instantiation of the User model.
 User = get_user_model()
 
-
+# Structural Pattern: Adapter
+# This function adapts Google's OAuth2 token verification to your backend's needs.
 def verify_google_id_token(id_token_str: str):
     try:
         return id_token.verify_oauth2_token(
@@ -25,6 +28,8 @@ def verify_google_id_token(id_token_str: str):
         raise GraphQLError("Invalid Google token")
 
 
+# Creational Pattern: Builder
+# This function incrementally builds and configures a user and their profile.
 def get_or_create_google_user(payload: dict) -> User:
     email = payload.get("email")
     sub = payload.get("sub")
@@ -73,6 +78,7 @@ def get_or_create_google_user(payload: dict) -> User:
     return user
 
 
+# Adapter Pattern: Adapts JWT token creation to your backend's needs.
 def get_access_token(user: User) -> str:
     return get_token(user)
 

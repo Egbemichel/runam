@@ -5,8 +5,12 @@ from apps.users.models import UserProfile
 from apps.roles.models import Role
 
 
+# Structural Pattern: Adapter
+# This class adapts Django Allauth's social account system to your custom user/profile logic.
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
 
+    # Behavioral Pattern: Template Method
+    # Overriding a hook in the parent class to customize user population.
     def populate_user(self, request, sociallogin, data):
         """
         Map Google → built-in User fields (before save)
@@ -25,6 +29,8 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         return user
 
     @transaction.atomic
+    # Behavioral Pattern: Template Method
+    # Overriding a hook in the parent class to customize user saving and profile/role assignment.
     def save_user(self, request, sociallogin, form=None):
         """
         After user exists: ensure profile, set defaults, assign role
