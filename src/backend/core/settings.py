@@ -6,6 +6,8 @@ Configured for GraphQL (Graphene + graphql-jwt), not REST.
 import os
 from datetime import timedelta
 from pathlib import Path
+
+import dj_database_url
 from dotenv import load_dotenv
 
 # -------------------------------------------------------------------
@@ -19,7 +21,7 @@ SECRET_KEY = os.getenv(
     'django-insecure-k#oc+-y2hbem_c_bck#ka_#lzb9=k@sd)wx!^rk)zovt4q0sd-'
 )
 
-DEBUG = True
+DEBUG = os.getenv("DEBUG", False) == 'True'
 ALLOWED_HOSTS = ["*"]
 
 # -------------------------------------------------------------------
@@ -113,7 +115,12 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    },
+    'supabase': dj_database_url.config(
+        # Replace this value with your local database's connection string.
+        default=os.getenv('SUPABASE_POSTGRESQL_URL'),
+        conn_max_age=600
+    )
 }
 
 # -------------------------------------------------------------------
@@ -250,6 +257,53 @@ LOGGING = {
         'django': {'handlers': ['console'], 'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO')},
     },
 }
+
+if not DEBUG:
+    ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(" ") if os.getenv('ALLOWED_HOSTS') else []
+
+    DATABASES = {
+        'default': dj_database_url.config(
+            # Replace this value with your local database's connection string.
+            default=os.getenv('SUPABASE_POSTGRESQL_URL'),
+            conn_max_age=600
+        )
+    }
+
+    # Storage settings
+    # Configure your storage settings for production
+    AWS_ACCESS_KEY_ID = os.environ.get("SUPABASE_S3_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = os.environ.get("SUPABASE_S3_SECRET_ACCESS_KEY")
+    AWS_STORAGE_BUCKET_NAME = os.environ.get("SUPABASE_S3_BUCKET_NAME")
+    AWS_S3_REGION_NAME = os.environ.get("SUPABASE_S3_REGION_NAME")
+    AWS_S3_ENDPOINT_URL = os.environ.get("SUPABASE_S3_ENDPOINT_URL")
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_ADDRESSING_STYLE = "path"
+    AWS_QUERYSTRING_AUTH = True
+
+    STORAGES = {
+        "staticfiles": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {
+                "access_key": AWS_ACCESS_KEY_ID,
+                "secret_key": AWS_SECRET_ACCESS_KEY,
+                "bucket_name": AWS_STORAGE_BUCKET_NAME,
+                "region_name": AWS_S3_REGION_NAME,
+                "endpoint_url": AWS_S3_ENDPOINT_URL,
+                "location": "static",
+            },
+        },
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            "OPTIONS": {
+                "access_key": AWS_ACCESS_KEY_ID,
+                "secret_key": AWS_SECRET_ACCESS_KEY,
+                "bucket_name": AWS_STORAGE_BUCKET_NAME,
+                "region_name": AWS_S3_REGION_NAME,
+                "endpoint_url": AWS_S3_ENDPOINT_URL,
+                "location": "media",
+            },
+        },
+    }
 
 if not DEBUG:
     # Storage settings
